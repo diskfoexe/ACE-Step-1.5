@@ -3,6 +3,7 @@
 Handles all LM-related operations including initialization and generation
 """
 import os
+import sys
 import traceback
 import time
 import random
@@ -42,6 +43,7 @@ class LLMHandler:
         self.device = "cpu"
         self.dtype = torch.float32
         self.offload_to_cpu = False
+        self.disable_tqdm = os.environ.get("ACESTEP_DISABLE_TQDM", "").lower() in ("1", "true", "yes") or not sys.stderr.isatty()
 
         # HuggingFace Space persistent storage support
         if persistent_storage_path is None and self.IS_HUGGINGFACE_SPACE:
@@ -2064,7 +2066,7 @@ class LLMHandler:
         logits_processor = self._build_logits_processor(repetition_penalty)
         
         with torch.inference_mode():
-            for step in tqdm(range(max_new_tokens), desc="LLM Constrained Decoding", unit="token"):
+            for step in tqdm(range(max_new_tokens), desc="LLM Constrained Decoding", unit="token", disable=self.disable_tqdm):
                 # Forward pass
                 outputs = self._forward_pass(model, generated_ids, model_kwargs, past_key_values, use_cache)
                 
@@ -2169,7 +2171,7 @@ class LLMHandler:
         logits_processor = self._build_logits_processor(repetition_penalty)
         
         with torch.inference_mode():
-            for step in tqdm(range(max_new_tokens), desc="LLM CFG Generation", unit="token"):
+            for step in tqdm(range(max_new_tokens), desc="LLM CFG Generation", unit="token", disable=self.disable_tqdm):
                 # Forward pass for the entire batch (conditional + unconditional)
                 outputs = self._forward_pass(model, generated_ids, model_kwargs, past_key_values, use_cache)
                 
@@ -2390,7 +2392,12 @@ class LLMHandler:
             start_time = time.time()
             if hasattr(model, "to"):
                 model.to("cpu")
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+                torch.xpu.empty_cache()
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
             offload_time = time.time() - start_time
             logger.info(f"Offloaded LLM to CPU in {offload_time:.4f}s")
     

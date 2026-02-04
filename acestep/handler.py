@@ -3,6 +3,7 @@ Business Logic Handler
 Encapsulates all data processing and business logic as a bridge between model and UI
 """
 import os
+import sys
 
 # Disable tokenizers parallelism to avoid fork warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -82,6 +83,8 @@ class AceStepHandler:
         self.offload_to_cpu = False
         self.offload_dit_to_cpu = False
         self.current_offload_cost = 0.0
+        self.disable_tqdm = os.environ.get("ACESTEP_DISABLE_TQDM", "").lower() in ("1", "true", "yes") or not sys.stderr.isatty()
+        self.debug_stats = os.environ.get("ACESTEP_DEBUG_STATS", "").lower() in ("1", "true", "yes")
         
         # LoRA state
         self.lora_loaded = False
@@ -698,7 +701,7 @@ class AceStepHandler:
             # silence_latent is used in many places outside of model context,
             # so it should stay on GPU to avoid device mismatch errors.
             
-            torch.cuda.empty_cache()
+            self._empty_cache()
             offload_time = time.time() - start_time
             self.current_offload_cost += offload_time
             logger.info(f"[_load_model_context] Offloaded {model_name} to CPU in {offload_time:.4f}s")
@@ -1028,6 +1031,64 @@ class AceStepHandler:
         """Get project root directory path."""
         current_file = os.path.abspath(__file__)
         return os.path.dirname(os.path.dirname(current_file))
+
+    def _empty_cache(self) -> None:
+        """Clear device cache to reduce peak memory usage."""
+        if self.device.startswith("cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif self.device == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+            torch.mps.empty_cache()
+
+    def _get_system_memory_gb(self) -> Optional[float]:
+        """Return total system RAM in GB when available."""
+        try:
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            page_count = os.sysconf("SC_PHYS_PAGES")
+            if page_size and page_count:
+                return (page_size * page_count) / (1024 ** 3)
+        except (ValueError, OSError, AttributeError):
+            return None
+        return None
+
+    def _get_effective_mps_memory_gb(self) -> Optional[float]:
+        """Best-effort MPS memory estimate (recommended max or system RAM)."""
+        if hasattr(torch, "mps") and hasattr(torch.mps, "recommended_max_memory"):
+            try:
+                return torch.mps.recommended_max_memory() / (1024 ** 3)
+            except Exception:
+                pass
+        return self._get_system_memory_gb()
+
+    def _get_auto_decode_chunk_size(self) -> int:
+        """Choose a conservative VAE decode chunk size based on memory."""
+        override = os.environ.get("ACESTEP_VAE_DECODE_CHUNK_SIZE")
+        if override:
+            try:
+                value = int(override)
+                if value > 0:
+                    return value
+            except ValueError:
+                pass
+        if self.device == "mps":
+            mem_gb = self._get_effective_mps_memory_gb()
+            if mem_gb is not None:
+                if mem_gb >= 48:
+                    return 1536
+                if mem_gb >= 24:
+                    return 1024
+        return 512
+
+    def _should_offload_wav_to_cpu(self) -> bool:
+        """Decide whether to offload decoded wavs to CPU for memory safety."""
+        override = os.environ.get("ACESTEP_MPS_DECODE_OFFLOAD")
+        if override:
+            return override.lower() in ("1", "true", "yes")
+        if self.device != "mps":
+            return True
+        mem_gb = self._get_effective_mps_memory_gb()
+        if mem_gb is not None and mem_gb >= 32:
+            return False
+        return True
     
     def _get_vae_dtype(self, device: Optional[str] = None) -> torch.dtype:
         """Get VAE dtype based on device."""
@@ -2329,27 +2390,28 @@ class AceStepHandler:
         }
         # Add custom timesteps if provided (convert to tensor)
         if timesteps is not None:
-            generate_kwargs["timesteps"] = torch.tensor(timesteps, dtype=torch.float32)
+            generate_kwargs["timesteps"] = torch.tensor(timesteps, dtype=torch.float32, device=self.device)
         logger.info("[service_generate] Generating audio...")
-        with self._load_model_context("model"):
-            # Prepare condition tensors first (for LRC timestamp generation)
-            encoder_hidden_states, encoder_attention_mask, context_latents = self.model.prepare_condition(
-                text_hidden_states=text_hidden_states,
-                text_attention_mask=text_attention_mask,
-                lyric_hidden_states=lyric_hidden_states,
-                lyric_attention_mask=lyric_attention_mask,
-                refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
-                refer_audio_order_mask=refer_audio_order_mask,
-                hidden_states=src_latents,
-                attention_mask=torch.ones(src_latents.shape[0], src_latents.shape[1], device=src_latents.device, dtype=src_latents.dtype),
-                silence_latent=self.silence_latent,
-                src_latents=src_latents,
-                chunk_masks=chunk_mask,
-                is_covers=is_covers,
-                precomputed_lm_hints_25Hz=precomputed_lm_hints_25Hz,
-            )
-            
-            outputs = self.model.generate_audio(**generate_kwargs)
+        with torch.inference_mode():
+            with self._load_model_context("model"):
+                # Prepare condition tensors first (for LRC timestamp generation)
+                encoder_hidden_states, encoder_attention_mask, context_latents = self.model.prepare_condition(
+                    text_hidden_states=text_hidden_states,
+                    text_attention_mask=text_attention_mask,
+                    lyric_hidden_states=lyric_hidden_states,
+                    lyric_attention_mask=lyric_attention_mask,
+                    refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
+                    refer_audio_order_mask=refer_audio_order_mask,
+                    hidden_states=src_latents,
+                    attention_mask=torch.ones(src_latents.shape[0], src_latents.shape[1], device=src_latents.device, dtype=src_latents.dtype),
+                    silence_latent=self.silence_latent,
+                    src_latents=src_latents,
+                    chunk_masks=chunk_mask,
+                    is_covers=is_covers,
+                    precomputed_lm_hints_25Hz=precomputed_lm_hints_25Hz,
+                )
+                
+                outputs = self.model.generate_audio(**generate_kwargs)
         
         # Add intermediate information to outputs for extra_outputs
         outputs["src_latents"] = src_latents
@@ -2366,17 +2428,21 @@ class AceStepHandler:
         
         return outputs
 
-    def tiled_decode(self, latents, chunk_size=512, overlap=64, offload_wav_to_cpu=True):
+    def tiled_decode(self, latents, chunk_size: Optional[int] = None, overlap: int = 64, offload_wav_to_cpu: Optional[bool] = None):
         """
         Decode latents using tiling to reduce VRAM usage.
         Uses overlap-discard strategy to avoid boundary artifacts.
         
         Args:
             latents: [Batch, Channels, Length]
-            chunk_size: Size of latent chunk to process at once
+            chunk_size: Size of latent chunk to process at once (auto-tuned if None)
             overlap: Overlap size in latent frames
             offload_wav_to_cpu: If True, offload decoded wav audio to CPU immediately to save VRAM
         """
+        if chunk_size is None:
+            chunk_size = self._get_auto_decode_chunk_size()
+        if offload_wav_to_cpu is None:
+            offload_wav_to_cpu = self._should_offload_wav_to_cpu()
         B, C, T = latents.shape
         
         # If short enough, decode directly
@@ -2406,7 +2472,7 @@ class AceStepHandler:
         decoded_audio_list = []
         upsample_factor = None
         
-        for i in tqdm(range(num_steps), desc="Decoding audio chunks"):
+        for i in tqdm(range(num_steps), desc="Decoding audio chunks", disable=self.disable_tqdm):
             # Core range in latents
             core_start = i * stride
             core_end = min(core_start + stride, T)
@@ -2483,7 +2549,7 @@ class AceStepHandler:
         del first_audio_chunk, first_audio_core, first_latent_chunk
         
         # Process remaining chunks
-        for i in tqdm(range(1, num_steps), desc="Decoding audio chunks"):
+        for i in tqdm(range(1, num_steps), desc="Decoding audio chunks", disable=self.disable_tqdm):
             # Core range in latents
             core_start = i * stride
             core_end = min(core_start + stride, T)
@@ -2545,8 +2611,12 @@ class AceStepHandler:
         # Default values for 48kHz audio, adaptive to GPU memory
         if chunk_size is None:
             gpu_memory = get_gpu_memory_gb()
+            if gpu_memory <= 0 and self.device == "mps":
+                mem_gb = self._get_effective_mps_memory_gb()
+                if mem_gb is not None:
+                    gpu_memory = mem_gb
             if gpu_memory <= 8:
-                chunk_size = 48000 * 15  # 15 seconds for low VRAM (<4GB)
+                chunk_size = 48000 * 15  # 15 seconds for low VRAM
             else:
                 chunk_size = 48000 * 30  # 30 seconds for normal VRAM
         if overlap is None:
@@ -2590,7 +2660,7 @@ class AceStepHandler:
         encoded_latent_list = []
         downsample_factor = None
         
-        for i in tqdm(range(num_steps), desc="Encoding audio chunks"):
+        for i in tqdm(range(num_steps), desc="Encoding audio chunks", disable=self.disable_tqdm):
             # Core range in audio samples
             core_start = i * stride
             core_end = min(core_start + stride, S)
@@ -2664,7 +2734,7 @@ class AceStepHandler:
         del first_audio_chunk, first_latent_chunk, first_latent_core
         
         # Process remaining chunks
-        for i in tqdm(range(1, num_steps), desc="Encoding audio chunks"):
+        for i in tqdm(range(1, num_steps), desc="Encoding audio chunks", disable=self.disable_tqdm):
             # Core range in audio samples
             core_start = i * stride
             core_end = min(core_start + stride, S)
@@ -2892,7 +2962,8 @@ class AceStepHandler:
             pred_latents = outputs["target_latents"]  # [batch, latent_length, latent_dim]
             time_costs = outputs["time_costs"]
             time_costs["offload_time_cost"] = self.current_offload_cost
-            logger.debug(f"[generate_music] pred_latents: {pred_latents.shape}, dtype={pred_latents.dtype} {pred_latents.min()=}, {pred_latents.max()=}, {pred_latents.mean()=} {pred_latents.std()=}")
+            if self.debug_stats:
+                logger.debug(f"[generate_music] pred_latents: {pred_latents.shape}, dtype={pred_latents.dtype} {pred_latents.min()=}, {pred_latents.max()=}, {pred_latents.mean()=} {pred_latents.std()=}")
             logger.debug(f"[generate_music] time_costs: {time_costs}")
             if progress:
                 progress(0.8, desc="Decoding audio...")
@@ -2912,9 +2983,10 @@ class AceStepHandler:
                     
                     # Release original pred_latents to free VRAM before VAE decode
                     del pred_latents
-                    torch.cuda.empty_cache()
+                    self._empty_cache()
                     
-                    logger.debug(f"[generate_music] Before VAE decode: allocated={torch.cuda.memory_allocated()/1024**3:.2f}GB, max={torch.cuda.max_memory_allocated()/1024**3:.2f}GB")
+                    if self.device.startswith("cuda") and torch.cuda.is_available():
+                        logger.debug(f"[generate_music] Before VAE decode: allocated={torch.cuda.memory_allocated()/1024**3:.2f}GB, max={torch.cuda.max_memory_allocated()/1024**3:.2f}GB")
                     
                     if use_tiled_decode:
                         logger.info("[generate_music] Using tiled VAE decode to reduce VRAM usage...")
@@ -2924,7 +2996,8 @@ class AceStepHandler:
                         pred_wavs = decoder_output.sample
                         del decoder_output
                     
-                    logger.debug(f"[generate_music] After VAE decode: allocated={torch.cuda.memory_allocated()/1024**3:.2f}GB, max={torch.cuda.max_memory_allocated()/1024**3:.2f}GB")
+                    if self.device.startswith("cuda") and torch.cuda.is_available():
+                        logger.debug(f"[generate_music] After VAE decode: allocated={torch.cuda.memory_allocated()/1024**3:.2f}GB, max={torch.cuda.max_memory_allocated()/1024**3:.2f}GB")
                     
                     # Release pred_latents_for_decode after decode
                     del pred_latents_for_decode
@@ -2933,7 +3006,7 @@ class AceStepHandler:
                     if pred_wavs.dtype != torch.float32:
                         pred_wavs = pred_wavs.float()
                     
-                    torch.cuda.empty_cache()
+                    self._empty_cache()
             end_time = time.time()
             time_costs["vae_decode_time_cost"] = end_time - start_time
             time_costs["total_time_cost"] = time_costs["total_time_cost"] + time_costs["vae_decode_time_cost"]
@@ -2952,7 +3025,7 @@ class AceStepHandler:
             
             for i in range(actual_batch_size):
                 # Extract audio tensor: [channels, samples] format, CPU, float32
-                audio_tensor = pred_wavs[i].cpu().float()
+                audio_tensor = pred_wavs[i].cpu()
                 audio_tensors.append(audio_tensor)
             
             status_message = f"✅ Generation completed successfully!"
