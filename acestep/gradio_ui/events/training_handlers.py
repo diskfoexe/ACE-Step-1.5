@@ -32,7 +32,7 @@ def scan_directory(
         Tuple of (table_data, status, slider_update, builder_state)
     """
     if not audio_dir or not audio_dir.strip():
-        return [], "❌ Please enter a directory path", gr.Slider(maximum=0, value=0), builder_state
+        return [], "❌ Please enter a directory path", gr.update(maximum=0, value=0), builder_state
     
     # Create or use existing builder
     builder = builder_state if builder_state else DatasetBuilder()
@@ -47,7 +47,7 @@ def scan_directory(
     samples, status = builder.scan_directory(audio_dir.strip())
     
     if not samples:
-        return [], status, gr.Slider(maximum=0, value=0), builder
+        return [], status, gr.update(maximum=0, value=0), builder
     
     # Set instrumental and tag for all samples
     builder.set_all_instrumental(all_instrumental)
@@ -60,7 +60,7 @@ def scan_directory(
     # Calculate slider max and return as Slider update
     slider_max = max(0, len(samples) - 1)
     
-    return table_data, status, gr.Slider(maximum=slider_max, value=0), builder
+    return table_data, status, gr.update(maximum=slider_max, value=0), builder
 
 
 def auto_label_all(

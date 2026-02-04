@@ -374,6 +374,17 @@ class AceStepHandler:
                     return f"❌ Failed to download main model: {msg}", False
                 logger.info(f"[initialize_service] {msg}")
             
+            # Resolve default DiT model if not provided
+            if not config_path:
+                available_models = self.get_available_acestep_v15_models()
+                if "acestep-v15-turbo" in available_models:
+                    config_path = "acestep-v15-turbo"
+                elif available_models:
+                    config_path = available_models[0]
+                else:
+                    config_path = "acestep-v15-turbo"
+                logger.info(f"[initialize_service] config_path not provided, using '{config_path}'")
+
             # Check and download the requested DiT model
             if not check_model_exists(config_path, checkpoint_path):
                 logger.info(f"[initialize_service] DiT model '{config_path}' not found, starting auto-download...")

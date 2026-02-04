@@ -132,18 +132,58 @@ def get_gpu_memory_gb() -> float:
     
     try:
         import torch
+        if hasattr(torch, 'xpu') and torch.xpu.is_available():
+            total_memory = torch.xpu.get_device_properties(0).total_memory
+            memory_gb = total_memory / (1024**3)
+            return memory_gb
         if torch.cuda.is_available():
             # Get total memory of the first GPU in GB
             total_memory = torch.cuda.get_device_properties(0).total_memory
             memory_gb = total_memory / (1024**3)  # Convert bytes to GB
             return memory_gb
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            logger.warning("MPS detected but total VRAM is not available; set MAX_CUDA_VRAM to override.")
+            # MPS doesn't expose VRAM; fall back to unified memory size as a proxy.
+            system_memory_gb = _get_system_memory_gb()
+            if system_memory_gb > 0:
+                logger.warning(
+                    f"MPS detected; using system memory ({system_memory_gb:.1f}GB) as VRAM proxy. "
+                    f"Set {DEBUG_MAX_CUDA_VRAM_ENV} to override."
+                )
+                return system_memory_gb
+            logger.warning(f"MPS detected but total memory is not available; set {DEBUG_MAX_CUDA_VRAM_ENV} to override.")
             return 0
         return 0
     except Exception as e:
         logger.warning(f"Failed to detect GPU memory: {e}")
         return 0
+
+
+def _get_system_memory_gb() -> float:
+    """Best-effort system memory detection in GB."""
+    try:
+        if hasattr(os, "sysconf"):
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            phys_pages = os.sysconf("SC_PHYS_PAGES")
+            total_bytes = float(page_size) * float(phys_pages)
+            return total_bytes / (1024**3)
+    except Exception:
+        pass
+    return 0.0
+
+
+def get_accelerator_type() -> str:
+    """Detect available accelerator type."""
+    try:
+        import torch
+        if hasattr(torch, 'xpu') and torch.xpu.is_available():
+            return "xpu"
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
 
 
 def get_gpu_tier(gpu_memory_gb: float) -> str:
