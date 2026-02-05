@@ -2979,6 +2979,10 @@ class AceStepHandler:
                 timesteps=timesteps,  # Pass custom timesteps if provided
             )
             
+            if "target_latents" not in outputs:
+                logger.error("[generate_music] Generation failed: target_latents missing in outputs")
+                return outputs
+
             logger.info("[generate_music] Model generation completed. Decoding latents...")
             pred_latents = outputs["target_latents"]  # [batch, latent_length, latent_dim]
             time_costs = outputs["time_costs"]
