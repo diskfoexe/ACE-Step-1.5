@@ -20,6 +20,11 @@ from loguru import logger
 DEBUG_MAX_CUDA_VRAM_ENV = "MAX_CUDA_VRAM"
 DEBUG_MAX_MPS_VRAM_ENV = "MAX_MPS_VRAM"
 
+# Apple Silicon (MPS) VRAM estimation parameters
+MIN_MPS_MEMORY_GB = 8.0
+MAX_MPS_MEMORY_GB = 24.0
+MPS_MEMORY_RATIO = 4.0
+
 
 @dataclass
 class GPUConfig:
@@ -125,11 +130,11 @@ def _get_mps_memory_gb() -> float:
         except ValueError:
             logger.warning(f"Invalid {DEBUG_MAX_MPS_VRAM_ENV} value: {debug_vram}, ignoring")
 
-    # Heuristic: quarter of system RAM, clamped to [8, 24] GB
+    # Heuristic: 1/MPS_MEMORY_RATIO of system RAM, clamped to [MIN_MPS_MEMORY_GB, MAX_MPS_MEMORY_GB]
     try:
         import psutil
         total_gb = psutil.virtual_memory().total / (1024**3)
-        estimated_gb = max(8.0, min(24.0, total_gb / 4.0))
+        estimated_gb = max(MIN_MPS_MEMORY_GB, min(MAX_MPS_MEMORY_GB, total_gb / MPS_MEMORY_RATIO))
         logger.warning(
             f"⚠️ MPS detected: estimating available GPU memory as {estimated_gb:.1f}GB "
             f"(set {DEBUG_MAX_MPS_VRAM_ENV} to override)"
