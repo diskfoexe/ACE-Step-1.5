@@ -344,6 +344,36 @@ class LLMHandler:
                     device = "xpu"
                 else:
                     device = "cpu"
+            elif device == "cuda" and not torch.cuda.is_available():
+                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    logger.warning("[initialize] CUDA requested but unavailable. Falling back to MPS.")
+                    device = "mps"
+                elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+                    logger.warning("[initialize] CUDA requested but unavailable. Falling back to XPU.")
+                    device = "xpu"
+                else:
+                    logger.warning("[initialize] CUDA requested but unavailable. Falling back to CPU.")
+                    device = "cpu"
+            elif device == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+                if torch.cuda.is_available():
+                    logger.warning("[initialize] MPS requested but unavailable. Falling back to CUDA.")
+                    device = "cuda"
+                elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+                    logger.warning("[initialize] MPS requested but unavailable. Falling back to XPU.")
+                    device = "xpu"
+                else:
+                    logger.warning("[initialize] MPS requested but unavailable. Falling back to CPU.")
+                    device = "cpu"
+            elif device == "xpu" and not (hasattr(torch, 'xpu') and torch.xpu.is_available()):
+                if torch.cuda.is_available():
+                    logger.warning("[initialize] XPU requested but unavailable. Falling back to CUDA.")
+                    device = "cuda"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    logger.warning("[initialize] XPU requested but unavailable. Falling back to MPS.")
+                    device = "mps"
+                else:
+                    logger.warning("[initialize] XPU requested but unavailable. Falling back to CPU.")
+                    device = "cpu"
 
             self.device = device
             self.offload_to_cpu = offload_to_cpu

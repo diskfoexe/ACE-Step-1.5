@@ -17,6 +17,7 @@ import random
 import uuid
 import hashlib
 import json
+import threading
 from contextlib import contextmanager
 from typing import Optional, Dict, Any, Tuple, List, Union
 
@@ -85,6 +86,16 @@ class AceStepHandler:
         self.current_offload_cost = 0.0
         self.disable_tqdm = os.environ.get("ACESTEP_DISABLE_TQDM", "").lower() in ("1", "true", "yes") or not sys.stderr.isatty()
         self.debug_stats = os.environ.get("ACESTEP_DEBUG_STATS", "").lower() in ("1", "true", "yes")
+        self._last_diffusion_per_step_sec: Optional[float] = None
+        self._progress_estimates_lock = threading.Lock()
+        self._progress_estimates = {"records": []}
+        self._progress_estimates_path = os.path.join(
+            self._get_project_root(),
+            ".cache",
+            "acestep",
+            "progress_estimates.json",
+        )
+        self._load_progress_estimates()
         
         # LoRA state
         self.lora_loaded = False
@@ -344,6 +355,36 @@ class AceStepHandler:
                     device = "xpu"
                 else:
                     device = "cpu"
+            elif device == "cuda" and not torch.cuda.is_available():
+                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    logger.warning("[initialize_service] CUDA requested but unavailable. Falling back to MPS.")
+                    device = "mps"
+                elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+                    logger.warning("[initialize_service] CUDA requested but unavailable. Falling back to XPU.")
+                    device = "xpu"
+                else:
+                    logger.warning("[initialize_service] CUDA requested but unavailable. Falling back to CPU.")
+                    device = "cpu"
+            elif device == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+                if torch.cuda.is_available():
+                    logger.warning("[initialize_service] MPS requested but unavailable. Falling back to CUDA.")
+                    device = "cuda"
+                elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+                    logger.warning("[initialize_service] MPS requested but unavailable. Falling back to XPU.")
+                    device = "xpu"
+                else:
+                    logger.warning("[initialize_service] MPS requested but unavailable. Falling back to CPU.")
+                    device = "cpu"
+            elif device == "xpu" and not (hasattr(torch, 'xpu') and torch.xpu.is_available()):
+                if torch.cuda.is_available():
+                    logger.warning("[initialize_service] XPU requested but unavailable. Falling back to CUDA.")
+                    device = "cuda"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    logger.warning("[initialize_service] XPU requested but unavailable. Falling back to MPS.")
+                    device = "mps"
+                else:
+                    logger.warning("[initialize_service] XPU requested but unavailable. Falling back to CPU.")
+                    device = "cpu"
 
             status_msg = ""
             
@@ -534,7 +575,13 @@ class AceStepHandler:
         """Check if tensor is on the target device (handles cuda vs cuda:0 comparison)."""
         if tensor is None:
             return True
-        target_type = "cpu" if target_device == "cpu" else "cuda"
+        try:
+            if isinstance(target_device, torch.device):
+                target_type = target_device.type
+            else:
+                target_type = torch.device(str(target_device)).type
+        except Exception:
+            target_type = "cpu" if str(target_device) == "cpu" else "cuda"
         return tensor.device.type == target_type
     
     def _ensure_silence_latent_on_device(self):
@@ -624,9 +671,14 @@ class AceStepHandler:
                     moved_state_dict[key] = value
             model.load_state_dict(moved_state_dict)
         
-        # Synchronize CUDA to ensure all transfers are complete
-        if device != "cpu" and torch.cuda.is_available():
-            torch.cuda.synchronize()
+        # Synchronize to ensure all transfers are complete
+        if device != "cpu":
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            elif device == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
+                torch.mps.synchronize()
+            elif hasattr(torch, "xpu") and torch.xpu.is_available():
+                torch.xpu.synchronize()
         
         # Final verification
         if device != "cpu":
@@ -1032,6 +1084,121 @@ class AceStepHandler:
         current_file = os.path.abspath(__file__)
         return os.path.dirname(os.path.dirname(current_file))
 
+    def _load_progress_estimates(self) -> None:
+        """Load persisted diffusion progress estimates if available."""
+        try:
+            if os.path.exists(self._progress_estimates_path):
+                with open(self._progress_estimates_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and isinstance(data.get("records"), list):
+                        self._progress_estimates = data
+        except Exception:
+            # Ignore corrupted cache; it will be overwritten on next save.
+            self._progress_estimates = {"records": []}
+
+    def _save_progress_estimates(self) -> None:
+        """Persist diffusion progress estimates."""
+        try:
+            os.makedirs(os.path.dirname(self._progress_estimates_path), exist_ok=True)
+            with open(self._progress_estimates_path, "w", encoding="utf-8") as f:
+                json.dump(self._progress_estimates, f)
+        except Exception:
+            pass
+
+    def _duration_bucket(self, duration_sec: Optional[float]) -> str:
+        if duration_sec is None or duration_sec <= 0:
+            return "unknown"
+        if duration_sec <= 60:
+            return "short"
+        if duration_sec <= 180:
+            return "medium"
+        if duration_sec <= 360:
+            return "long"
+        return "xlong"
+
+    def _update_progress_estimate(
+        self,
+        per_step_sec: float,
+        infer_steps: int,
+        batch_size: int,
+        duration_sec: Optional[float],
+    ) -> None:
+        if per_step_sec <= 0 or infer_steps <= 0:
+            return
+        record = {
+            "device": self.device,
+            "infer_steps": int(infer_steps),
+            "batch_size": int(batch_size),
+            "duration_sec": float(duration_sec) if duration_sec and duration_sec > 0 else None,
+            "duration_bucket": self._duration_bucket(duration_sec),
+            "per_step_sec": float(per_step_sec),
+            "updated_at": time.time(),
+        }
+        with self._progress_estimates_lock:
+            records = self._progress_estimates.get("records", [])
+            records.append(record)
+            # Keep recent 100 records
+            records = records[-100:]
+            self._progress_estimates["records"] = records
+            self._progress_estimates["updated_at"] = time.time()
+            self._save_progress_estimates()
+
+    def _estimate_diffusion_per_step(
+        self,
+        infer_steps: int,
+        batch_size: int,
+        duration_sec: Optional[float],
+    ) -> Optional[float]:
+        # Prefer most recent exact-ish record
+        target_bucket = self._duration_bucket(duration_sec)
+        with self._progress_estimates_lock:
+            records = list(self._progress_estimates.get("records", []))
+        if not records:
+            return None
+
+        # Filter by device first
+        device_records = [r for r in records if r.get("device") == self.device] or records
+
+        # Exact match by steps/batch/bucket
+        for r in reversed(device_records):
+            if (
+                r.get("infer_steps") == infer_steps
+                and r.get("batch_size") == batch_size
+                and r.get("duration_bucket") == target_bucket
+            ):
+                return r.get("per_step_sec")
+
+        # Same steps + bucket, scale by batch and duration when possible
+        for r in reversed(device_records):
+            if r.get("infer_steps") == infer_steps and r.get("duration_bucket") == target_bucket:
+                base = r.get("per_step_sec")
+                base_batch = r.get("batch_size", batch_size)
+                base_dur = r.get("duration_sec")
+                if base and base_batch:
+                    est = base * (batch_size / base_batch)
+                    if duration_sec and base_dur:
+                        est *= (duration_sec / base_dur)
+                    return est
+
+        # Same steps, scale by batch and duration ratio if available
+        for r in reversed(device_records):
+            if r.get("infer_steps") == infer_steps:
+                base = r.get("per_step_sec")
+                base_batch = r.get("batch_size", batch_size)
+                base_dur = r.get("duration_sec")
+                if base and base_batch:
+                    est = base * (batch_size / base_batch)
+                    if duration_sec and base_dur:
+                        est *= (duration_sec / base_dur)
+                    return est
+
+        # Fallback to global median
+        per_steps = [r.get("per_step_sec") for r in device_records if r.get("per_step_sec")]
+        if per_steps:
+            per_steps.sort()
+            return per_steps[len(per_steps) // 2]
+        return None
+
     def _empty_cache(self) -> None:
         """Clear device cache to reduce peak memory usage."""
         if self.device.startswith("cuda") and torch.cuda.is_available():
@@ -1089,6 +1256,47 @@ class AceStepHandler:
         if mem_gb is not None and mem_gb >= 32:
             return False
         return True
+
+    def _start_diffusion_progress_estimator(
+        self,
+        progress,
+        start: float,
+        end: float,
+        infer_steps: int,
+        batch_size: int,
+        duration_sec: Optional[float],
+        desc: str,
+    ):
+        """Best-effort progress updates during diffusion using previous step timing."""
+        if progress is None or infer_steps <= 0:
+            return None, None
+        per_step = self._estimate_diffusion_per_step(
+            infer_steps=infer_steps,
+            batch_size=batch_size,
+            duration_sec=duration_sec,
+        ) or self._last_diffusion_per_step_sec
+        if not per_step or per_step <= 0:
+            return None, None
+        expected = per_step * infer_steps
+        if expected <= 0:
+            return None, None
+        stop_event = threading.Event()
+
+        def _runner():
+            start_time = time.time()
+            while not stop_event.is_set():
+                elapsed = time.time() - start_time
+                frac = min(0.999, elapsed / expected)
+                value = start + (end - start) * frac
+                try:
+                    progress(value, desc=desc)
+                except Exception:
+                    pass
+                stop_event.wait(0.5)
+
+        thread = threading.Thread(target=_runner, name="diffusion-progress", daemon=True)
+        thread.start()
+        return stop_event, thread
     
     def _get_vae_dtype(self, device: Optional[str] = None) -> torch.dtype:
         """Get VAE dtype based on device."""
@@ -2922,8 +3130,6 @@ class AceStepHandler:
                 can_use_repainting
             )
             
-            progress(0.52, desc=f"Generating music (batch size: {actual_batch_size})...")
-            
             # Prepare audio_code_hints - use if audio_code_string is provided
             # This works for both text2music (auto-switched to cover) and cover tasks
             audio_code_hints_batch = None
@@ -2934,34 +3140,63 @@ class AceStepHandler:
                     audio_code_hints_batch = [audio_code_string] * actual_batch_size
 
             should_return_intermediate = (task_type == "text2music")
-            outputs = self.service_generate(
-                captions=captions_batch,
-                lyrics=lyrics_batch,
-                metas=metas_batch,  # Pass as dict, service will convert to string
-                vocal_languages=vocal_languages_batch,
-                refer_audios=refer_audios,  # Already in List[List[torch.Tensor]] format
-                target_wavs=target_wavs_tensor,  # Shape: [batch_size, 2, frames]
-                infer_steps=inference_steps,
-                guidance_scale=guidance_scale,
-                seed=actual_seed_list,  # Pass list of seeds, one per batch item
-                repainting_start=repainting_start_batch,
-                repainting_end=repainting_end_batch,
-                instructions=instructions_batch,  # Pass instructions to service
-                audio_cover_strength=audio_cover_strength,  # Pass audio cover strength
-                use_adg=use_adg,  # Pass use_adg parameter
-                cfg_interval_start=cfg_interval_start,  # Pass CFG interval start
-                cfg_interval_end=cfg_interval_end,  # Pass CFG interval end
-                shift=shift,  # Pass shift parameter
-                infer_method=infer_method,  # Pass infer method (ode or sde)
-                audio_code_hints=audio_code_hints_batch,  # Pass audio code hints as list
-                return_intermediate=should_return_intermediate,
-                timesteps=timesteps,  # Pass custom timesteps if provided
-            )
+            progress_desc = f"Generating music (batch size: {actual_batch_size})..."
+            infer_steps_for_progress = len(timesteps) if timesteps else inference_steps
+            progress(0.52, desc=progress_desc)
+            stop_event = None
+            progress_thread = None
+            try:
+                stop_event, progress_thread = self._start_diffusion_progress_estimator(
+                    progress=progress,
+                    start=0.52,
+                    end=0.79,
+                    infer_steps=infer_steps_for_progress,
+                    batch_size=actual_batch_size,
+                    duration_sec=audio_duration if audio_duration and audio_duration > 0 else None,
+                    desc=progress_desc,
+                )
+                outputs = self.service_generate(
+                    captions=captions_batch,
+                    lyrics=lyrics_batch,
+                    metas=metas_batch,  # Pass as dict, service will convert to string
+                    vocal_languages=vocal_languages_batch,
+                    refer_audios=refer_audios,  # Already in List[List[torch.Tensor]] format
+                    target_wavs=target_wavs_tensor,  # Shape: [batch_size, 2, frames]
+                    infer_steps=inference_steps,
+                    guidance_scale=guidance_scale,
+                    seed=actual_seed_list,  # Pass list of seeds, one per batch item
+                    repainting_start=repainting_start_batch,
+                    repainting_end=repainting_end_batch,
+                    instructions=instructions_batch,  # Pass instructions to service
+                    audio_cover_strength=audio_cover_strength,  # Pass audio cover strength
+                    use_adg=use_adg,  # Pass use_adg parameter
+                    cfg_interval_start=cfg_interval_start,  # Pass CFG interval start
+                    cfg_interval_end=cfg_interval_end,  # Pass CFG interval end
+                    shift=shift,  # Pass shift parameter
+                    infer_method=infer_method,  # Pass infer method (ode or sde)
+                    audio_code_hints=audio_code_hints_batch,  # Pass audio code hints as list
+                    return_intermediate=should_return_intermediate,
+                    timesteps=timesteps,  # Pass custom timesteps if provided
+                )
+            finally:
+                if stop_event is not None:
+                    stop_event.set()
+                if progress_thread is not None:
+                    progress_thread.join(timeout=1.0)
             
             logger.info("[generate_music] Model generation completed. Decoding latents...")
             pred_latents = outputs["target_latents"]  # [batch, latent_length, latent_dim]
             time_costs = outputs["time_costs"]
             time_costs["offload_time_cost"] = self.current_offload_cost
+            per_step = time_costs.get("diffusion_per_step_time_cost")
+            if isinstance(per_step, (int, float)) and per_step > 0:
+                self._last_diffusion_per_step_sec = float(per_step)
+                self._update_progress_estimate(
+                    per_step_sec=float(per_step),
+                    infer_steps=infer_steps_for_progress,
+                    batch_size=actual_batch_size,
+                    duration_sec=audio_duration if audio_duration and audio_duration > 0 else None,
+                )
             if self.debug_stats:
                 logger.debug(f"[generate_music] pred_latents: {pred_latents.shape}, dtype={pred_latents.dtype} {pred_latents.min()=}, {pred_latents.max()=}, {pred_latents.mean()=} {pred_latents.std()=}")
             logger.debug(f"[generate_music] time_costs: {time_costs}")
