@@ -322,7 +322,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
 
                             with gr.Column(scale=1, min_width=100):
                                 random_desc_btn = gr.Button(
-                                    "🎲",
+                                    t("generation.random_btn"),
                                     variant="secondary",
                                     size="sm",
                                     scale=2
@@ -365,7 +365,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                         )
                         with gr.Column(scale=1, min_width=100):
                             sample_btn = gr.Button(
-                                "🎲",
+                                t("generation.random_btn"),
                                 variant="secondary",
                                 size="sm",
                                 scale=2,
@@ -404,7 +404,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                         # 右侧：格式化按钮 (Button)
                         # 放在同一行最右侧，操作更顺手
                         format_btn = gr.Button(
-                            t("generation.format_btn"),
+                            t("generation.format_btn_label"),
                             variant="secondary",
                             scale=1,
                             min_width=80,
@@ -666,11 +666,13 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
             with gr.Column(scale=1, variant="compact"):
                 think_checkbox = gr.Checkbox(
                     label=t("generation.think_label"),
+                    info=t("generation.think_info"),
                     value=True,
                     scale=1,
                 )
                 allow_lm_batch = gr.Checkbox(
                     label=t("generation.parallel_thinking_label"),
+                    info=t("generation.parallel_thinking_info"),
                     value=True,
                     scale=1,
                 )
