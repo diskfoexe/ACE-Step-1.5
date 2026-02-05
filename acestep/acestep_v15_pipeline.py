@@ -115,7 +115,15 @@ def main():
         print(f"CPU offload disabled by default (GPU >= 16GB)")
     else:
         print("No GPU detected, running on CPU")
-    
+
+    # Define local outputs directory
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_dir = os.path.join(project_root, "gradio_outputs")
+    # Normalize path to use forward slashes for Gradio 6 compatibility on Windows
+    output_dir = output_dir.replace("\\", "/")
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Output directory: {output_dir}")
+
     parser = argparse.ArgumentParser(description="Gradio Demo for ACE-Step V1.5")
     parser.add_argument("--port", type=int, default=7860, help="Port to run the gradio server on")
     parser.add_argument("--share", action="store_true", help="Create a public link")
@@ -131,13 +139,14 @@ def main():
     parser.add_argument("--init_service", type=lambda x: x.lower() in ['true', '1', 'yes'], default=False, help="Initialize service on startup (default: False)")
     parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint file path (optional, for display purposes)")
     parser.add_argument("--config_path", type=str, default=None, help="Main model path (e.g., 'acestep-v15-turbo')")
-    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "mps", "cpu"], help="Processing device (default: auto)")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "mps", "cpu", "xpu"], help="Processing device (default: auto)")
     parser.add_argument("--init_llm", type=lambda x: x.lower() in ['true', '1', 'yes'], default=None, help="Initialize 5Hz LM (default: auto based on GPU memory)")
     parser.add_argument("--lm_model_path", type=str, default=None, help="5Hz LM model path (e.g., 'acestep-5Hz-lm-0.6B')")
     parser.add_argument("--backend", type=str, default="vllm", choices=["vllm", "pt"], help="5Hz LM backend (default: vllm)")
     parser.add_argument("--use_flash_attention", type=lambda x: x.lower() in ['true', '1', 'yes'], default=None, help="Use flash attention (default: auto-detect)")
     parser.add_argument("--offload_to_cpu", type=lambda x: x.lower() in ['true', '1', 'yes'], default=auto_offload, help=f"Offload models to CPU (default: {'True' if auto_offload else 'False'}, auto-detected based on GPU VRAM)")
     parser.add_argument("--offload_dit_to_cpu", type=lambda x: x.lower() in ['true', '1', 'yes'], default=False, help="Offload DiT to CPU (default: False)")
+    parser.add_argument("--download-source", type=str, default=None, choices=["huggingface", "modelscope", "auto"], help="Preferred model download source (default: auto-detect based on network)")
 
     # API mode argument
     parser.add_argument("--enable-api", action="store_true", help="Enable API endpoints (default: False)")
@@ -214,7 +223,13 @@ def main():
             use_flash_attention = args.use_flash_attention
             if use_flash_attention is None:
                 use_flash_attention = dit_handler.is_flash_attention_available()
-            
+
+            # Determine download source preference
+            prefer_source = None
+            if args.download_source and args.download_source != "auto":
+                prefer_source = args.download_source
+                print(f"Using preferred download source: {prefer_source}")
+
             # Initialize DiT handler
             print(f"Initializing DiT model: {args.config_path} on {args.device}...")
             init_status, enable_generate = dit_handler.initialize_service(
@@ -224,7 +239,8 @@ def main():
                 use_flash_attention=use_flash_attention,
                 compile_model=False,
                 offload_to_cpu=args.offload_to_cpu,
-                offload_dit_to_cpu=args.offload_dit_to_cpu
+                offload_dit_to_cpu=args.offload_dit_to_cpu,
+                prefer_source=prefer_source
             )
             
             if not enable_generate:
@@ -289,6 +305,7 @@ def main():
                 'llm_handler': llm_handler,
                 'language': args.language,
                 'gpu_config': gpu_config,  # Pass GPU config to UI
+                'output_dir': output_dir,  # Pass output dir to UI
             }
             
             print("Service initialization completed successfully!")
@@ -301,6 +318,7 @@ def main():
             init_params = {
                 'gpu_config': gpu_config,
                 'language': args.language,
+                'output_dir': output_dir,  # Pass output dir to UI
             }
         
         demo = create_demo(init_params=init_params, language=args.language)
@@ -311,6 +329,7 @@ def main():
         demo.queue(
             max_size=20,  # Maximum queue size (adjust based on your needs)
             status_update_rate="auto",  # Update rate for queue status
+            default_concurrency_limit=1,  # Prevents VRAM saturation
         )
 
         print(f"Launching server on {args.server_name}:{args.port}...")
@@ -336,6 +355,7 @@ def main():
                 prevent_thread_lock=True,  # Don't block, so we can add routes
                 inbrowser=False,
                 auth=auth,
+                allowed_paths=[output_dir],  # Fix audio loading on Windows
             )
 
             # Now add API routes to Gradio's FastAPI app (app is available after launch)
@@ -362,6 +382,7 @@ def main():
                 prevent_thread_lock=False,
                 inbrowser=False,
                 auth=auth,
+                allowed_paths=[output_dir],  # Fix audio loading on Windows
             )
     except Exception as e:
         print(f"Error launching Gradio: {e}", file=sys.stderr)

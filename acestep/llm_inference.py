@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import yaml
 import torch
 from loguru import logger
+from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.streamers import BaseStreamer
 from transformers.generation.logits_process import (
@@ -2023,6 +2024,10 @@ class LLMHandler:
             return output_text, f"✅ Generated successfully (pt) | length={len(output_text)}"
 
         except Exception as e:
+            # Log full traceback for debugging
+            import traceback
+            error_detail = traceback.format_exc()
+            logger.error(f"Error in generate_from_formatted_prompt: {type(e).__name__}: {e}\n{error_detail}")
             # Reset nano-vllm state on error to prevent stale context from causing
             # subsequent CUDA illegal memory access errors
             if self.llm_backend == "vllm":
@@ -2038,10 +2043,18 @@ class LLMHandler:
                         self.llm.reset()
                 except Exception:
                     pass  # Ignore errors during cleanup
-            # Clear device cache to release any corrupted memory
-            self._empty_device_cache()
-            self._sync_device()
-            return "", f"❌ Error generating from formatted prompt: {e}"
+            # Clear CUDA or XPU cache to release any corrupted memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+                torch.xpu.empty_cache()
+                torch.xpu.synchronize()
+            elif hasattr(torch, "mps") and torch.mps.is_available():
+                torch.mps.empty_cache()
+                torch.mps.synchronize()
+              
+            return "", f"❌ Error generating from formatted prompt: {type(e).__name__}: {e or error_detail.splitlines()[-1]}"
     
     def _generate_with_constrained_decoding(
         self,
@@ -2086,7 +2099,7 @@ class LLMHandler:
         logits_processor = self._build_logits_processor(repetition_penalty)
         
         with torch.no_grad():
-            for step in range(max_new_tokens):
+            for step in tqdm(range(max_new_tokens), desc="LLM Constrained Decoding", unit="token"):
                 # Forward pass
                 outputs = self._forward_pass(model, generated_ids, model_kwargs, past_key_values, use_cache)
                 
@@ -2191,7 +2204,7 @@ class LLMHandler:
         logits_processor = self._build_logits_processor(repetition_penalty)
         
         with torch.no_grad():
-            for step in range(max_new_tokens):
+            for step in tqdm(range(max_new_tokens), desc="LLM CFG Generation", unit="token"):
                 # Forward pass for the entire batch (conditional + unconditional)
                 outputs = self._forward_pass(model, generated_ids, model_kwargs, past_key_values, use_cache)
                 

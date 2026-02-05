@@ -151,6 +151,12 @@ def get_gpu_memory_gb() -> float:
                 )
                 return system_memory_gb
             logger.warning(f"MPS detected but total memory is not available; set {DEBUG_MAX_CUDA_VRAM_ENV} to override.")
+        elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+            # Get total memory of the first XPU in GB
+            total_memory = torch.xpu.get_device_properties(0).total_memory
+            memory_gb = total_memory / (1024**3)  # Convert bytes to GB
+            return memory_gb
+        else:
             return 0
         return 0
     except Exception as e:
