@@ -237,6 +237,11 @@ uv sync
 uv run acestep
 ```
 
+**Apple Silicon (MPS):**
+```bash
+uv run acestep --device mps --init_service true --offload_to_cpu false
+```
+
 **Using Python directly:**
 
 > **Note:** Make sure to activate your Python environment first:
