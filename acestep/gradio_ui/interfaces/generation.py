@@ -187,40 +187,6 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
             # Set init_status value from init_params if pre-initialized
             init_status_value = init_params.get('init_status', '') if service_pre_initialized else ''
             init_status = gr.Textbox(label=t("service.status_label"), interactive=False, lines=3, value=init_status_value)
-            
-            # LoRA Configuration Section
-            gr.HTML("<hr><h4>🔧 LoRA Adapter</h4>")
-            with gr.Row():
-                lora_path = gr.Textbox(
-                    label="LoRA Path",
-                    placeholder="./lora_output/final/adapter",
-                    info="Path to trained LoRA adapter directory",
-                    scale=3,
-                )
-                load_lora_btn = gr.Button("📥 Load LoRA", variant="secondary", scale=1)
-                unload_lora_btn = gr.Button("🗑️ Unload", variant="secondary", scale=1)
-            with gr.Row():
-                use_lora_checkbox = gr.Checkbox(
-                    label="Use LoRA",
-                    value=False,
-                    info="Enable LoRA adapter for inference",
-                    scale=1,
-                )
-                lora_scale_slider = gr.Slider(
-                    minimum=0.0,
-                    maximum=1.0,
-                    value=1.0,
-                    step=0.05,
-                    label="LoRA Scale",
-                    info="LoRA influence strength (0=disabled, 1=full)",
-                    scale=2,
-                )
-                lora_status = gr.Textbox(
-                    label="LoRA Status",
-                    value="No LoRA loaded",
-                    interactive=False,
-                    scale=2,
-                )
         
         # Inputs
         with gr.Row():
@@ -489,6 +455,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         # Default UI settings use turbo mode (max 20 steps, default 8, show shift with default 3)
         # These will be updated after model initialization based on handler.is_turbo_model()
         with gr.Accordion(t("generation.advanced_settings"), open=False):
+            gr.HTML(f"<h4>{t('generation.dit_params_title') if t('generation.dit_params_title') != 'generation.dit_params_title' else 'DiT Parameters'}</h4>")
             with gr.Row():
                 inference_steps = gr.Slider(
                     minimum=1,
@@ -739,13 +706,6 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         "offload_dit_to_cpu_checkbox": offload_dit_to_cpu_checkbox,
         "compile_model_checkbox": compile_model_checkbox,
         "quantization_checkbox": quantization_checkbox,
-        # LoRA components
-        "lora_path": lora_path,
-        "load_lora_btn": load_lora_btn,
-        "unload_lora_btn": unload_lora_btn,
-        "use_lora_checkbox": use_lora_checkbox,
-        "lora_scale_slider": lora_scale_slider,
-        "lora_status": lora_status,
         "task_type": task_type,
         "instruction_display_gen": instruction_display_gen,
         "track_name": track_name,

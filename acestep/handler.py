@@ -88,6 +88,10 @@ class AceStepHandler:
         self.use_lora = False
         self.lora_scale = 1.0  # LoRA influence scale (0-1)
         self._base_decoder = None  # Backup of original decoder
+
+        # Initialization state tracking
+        self.loaded_config_path = None
+        self.loaded_device = None
     
     def get_available_checkpoints(self) -> str:
         """Return project root directory path"""
@@ -344,6 +348,15 @@ class AceStepHandler:
                 else:
                     device = "cpu"
 
+            # Check if already initialized with same parameters
+            if (self.model is not None and
+                self.vae is not None and
+                self.text_encoder is not None and
+                self.loaded_config_path == config_path and
+                self.loaded_device == device):
+                logger.info(f"[initialize_service] Model already initialized with config={config_path} on {device}. Skipping reload.")
+                return f"✅ Model already initialized with {config_path} on {device}", True
+
             status_msg = ""
             
             self.device = device
@@ -512,6 +525,10 @@ class AceStepHandler:
             # Determine actual attention implementation used
             actual_attn = getattr(self.config, "_attn_implementation", "eager")
             
+            # Update loaded state
+            self.loaded_config_path = config_path
+            self.loaded_device = device
+
             status_msg = f"✅ Model initialized successfully on {device}\n"
             status_msg += f"Main model: {acestep_v15_checkpoint_path}\n"
             status_msg += f"VAE: {vae_checkpoint_path}\n"
@@ -525,6 +542,9 @@ class AceStepHandler:
             return status_msg, True
             
         except Exception as e:
+            # Reset loaded state on failure
+            self.loaded_config_path = None
+            self.loaded_device = None
             error_msg = f"❌ Error initializing model: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             logger.exception("[initialize_service] Error initializing model")
             return error_msg, False
