@@ -56,6 +56,39 @@ class LLMHandler:
         # Shared HuggingFace model for perplexity calculation
         self._hf_model_for_scoring = None
 
+    def unload(self) -> None:
+        """Release LM weights/tokenizer and clear caches to free memory."""
+        try:
+            if self.llm_backend == "vllm":
+                try:
+                    if hasattr(self.llm, "reset"):
+                        self.llm.reset()
+                except Exception:
+                    pass
+            self.llm = None
+            self.llm_tokenizer = None
+            self.constrained_processor = None
+            self.llm_initialized = False
+            self.llm_backend = None
+            try:
+                import gc
+                gc.collect()
+            except Exception:
+                pass
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                if hasattr(torch.mps, "synchronize"):
+                    torch.mps.synchronize()
+                if hasattr(torch.mps, "empty_cache"):
+                    torch.mps.empty_cache()
+            elif hasattr(torch, "xpu") and torch.xpu.is_available():
+                torch.xpu.empty_cache()
+                torch.xpu.synchronize()
+        except Exception:
+            pass
+
     def _get_checkpoint_dir(self) -> str:
         """Get checkpoint directory, prioritizing persistent storage"""
         if self.persistent_storage_path:

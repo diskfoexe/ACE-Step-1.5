@@ -684,6 +684,8 @@ def _env_bool(name: str, default: bool) -> bool:
     return v.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+
+
 def _get_model_name(config_path: str) -> str:
     """
     Extract model name from config_path.
@@ -1165,6 +1167,7 @@ def create_app() -> FastAPI:
                         had_error = getattr(app.state, "_llm_init_error", None)
                         if initialized or had_error is not None:
                             return
+                        print("[API Server] reloading.")
 
                         project_root = _get_project_root()
                         checkpoint_dir = os.path.join(project_root, "checkpoints")
@@ -1226,6 +1229,17 @@ def create_app() -> FastAPI:
                 use_cot_caption = bool(req.use_cot_caption)
                 use_cot_language = bool(req.use_cot_language)
                 
+                # Unload LM for cover tasks on MPS to reduce memory; reload lazily when needed.
+                if req.task_type == "cover" and h.device == "mps":
+                    if getattr(app.state, "_llm_initialized", False) and getattr(llm, "llm_initialized", False):
+                        try:
+                            print("[API Server] unloading.")
+                            llm.unload()
+                            app.state._llm_initialized = False
+                            app.state._llm_init_error = None
+                        except Exception as e:
+                            print(f"[API Server] Failed to unload LM: {e}")
+
                 # LLM is needed for:
                 # - thinking mode (LM generates audio codes)
                 # - sample_mode (LM generates random caption/lyrics/metas)
@@ -1430,14 +1444,66 @@ def create_app() -> FastAPI:
                         _update_local_cache_progress(job_id, value_f, stage)
 
                 # Generate music using unified interface
-                result = generate_music(
-                    dit_handler=h,
-                    llm_handler=llm_to_pass,
-                    params=params,
-                    config=config,
-                    save_dir=app.state.temp_audio_dir,
-                    progress=_progress_cb,
-                )
+                sequential_runs = 1
+                if req.task_type == "cover" and h.device == "mps":
+                    # If user asked for multiple outputs, run sequentially on MPS to avoid OOM.
+                    if config.batch_size is not None and config.batch_size > 1:
+                        sequential_runs = int(config.batch_size)
+                        config.batch_size = 1
+                        print(f"[API Server] Job {job_id}: MPS cover sequential mode enabled (runs={sequential_runs})")
+
+                def _progress_for_slice(start: float, end: float):
+                    base = {"seen": False, "value": 0.0}
+                    def _cb(value: float, desc: str = "") -> None:
+                        try:
+                            value_f = max(0.0, min(1.0, float(value)))
+                        except Exception:
+                            value_f = 0.0
+                        if not base["seen"]:
+                            base["seen"] = True
+                            base["value"] = value_f
+                        # Normalize progress to avoid initial jump (e.g., 0.51 -> 0.0)
+                        if value_f <= base["value"]:
+                            norm = 0.0
+                        else:
+                            denom = max(1e-6, 1.0 - base["value"])
+                            norm = min(1.0, (value_f - base["value"]) / denom)
+                        mapped = start + (end - start) * norm
+                        _progress_cb(mapped, desc=desc)
+                    return _cb
+
+                aggregated_result = None
+                all_audios: List[Dict[str, Any]] = []
+                for run_idx in range(sequential_runs):
+                    if sequential_runs > 1:
+                        print(f"[API Server] Job {job_id}: Sequential cover run {run_idx + 1}/{sequential_runs}")
+                    if sequential_runs > 1:
+                        start = run_idx / sequential_runs
+                        end = (run_idx + 1) / sequential_runs
+                        progress_cb = _progress_for_slice(start, end)
+                    else:
+                        progress_cb = _progress_cb
+
+                    result = generate_music(
+                        dit_handler=h,
+                        llm_handler=llm_to_pass,
+                        params=params,
+                        config=config,
+                        save_dir=app.state.temp_audio_dir,
+                        progress=progress_cb,
+                    )
+                    if not result.success:
+                        raise RuntimeError(f"Music generation failed: {result.error or result.status_message}")
+
+                    if aggregated_result is None:
+                        aggregated_result = result
+                    all_audios.extend(result.audios)
+
+                # Use aggregated result with combined audios
+                if aggregated_result is None:
+                    raise RuntimeError("Music generation failed: no results")
+                aggregated_result.audios = all_audios
+                result = aggregated_result
 
                 if not result.success:
                     raise RuntimeError(f"Music generation failed: {result.error or result.status_message}")

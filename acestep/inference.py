@@ -9,6 +9,9 @@ backward-compatible Gradio UI support.
 import math
 import os
 import tempfile
+import shutil
+import subprocess
+import sys
 from typing import Optional, Union, List, Dict, Any, Tuple
 from dataclasses import dataclass, field, asdict
 from loguru import logger
@@ -400,8 +403,64 @@ def generate_music(
                    f"use_cot_metas={params.use_cot_metas}, need_lm_for_cot={need_lm_for_cot}, "
                    f"llm_initialized={llm_handler.llm_initialized if llm_handler else False}, use_lm={use_lm}")
 
+        def _infer_audio_duration_seconds(audio_path: str) -> Optional[float]:
+            """Best-effort duration inference for common audio formats."""
+            if not audio_path:
+                return None
+            # Try torchaudio (supports more formats when ffmpeg backend is available)
+            try:
+                import torchaudio
+                info = torchaudio.info(audio_path)
+                if info and info.num_frames and info.sample_rate:
+                    return float(info.num_frames) / float(info.sample_rate)
+            except Exception:
+                pass
+            # Try soundfile (fast for wav/flac)
+            try:
+                import soundfile as sf
+                info = sf.info(audio_path)
+                if info and info.frames and info.samplerate:
+                    return float(info.frames) / float(info.samplerate)
+            except Exception:
+                pass
+            # macOS fallback: use afinfo for m4a/aac
+            if sys.platform == "darwin" and shutil.which("afinfo"):
+                try:
+                    result = subprocess.run(
+                        ["afinfo", audio_path],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.stdout:
+                        for line in result.stdout.splitlines():
+                            if "duration:" in line:
+                                # Example: "duration:  183.165s"
+                                parts = line.strip().split()
+                                for p in parts:
+                                    if p.endswith("s"):
+                                        try:
+                                            return float(p.rstrip("s"))
+                                        except ValueError:
+                                            continue
+                except Exception:
+                    pass
+            return None
+
         # Clamp duration and batch size to GPU limits (applies to non-Gradio callers too)
         try:
+            # If duration not provided, try to infer from source audio to enable safe clamping.
+            if (audio_duration is None or float(audio_duration) <= 0) and (params.src_audio or params.reference_audio):
+                audio_path = params.src_audio or params.reference_audio
+                try:
+                    inferred = _infer_audio_duration_seconds(audio_path)
+                    if inferred and inferred > 0:
+                        audio_duration = inferred
+                        params.duration = inferred
+                        logger.info(f"[generate_music] Inferred duration from audio file: {inferred:.2f}s")
+                except Exception as e:
+                    logger.warning(f"[generate_music] Failed to infer duration from audio file: {e}")
+
             gpu_config = get_gpu_config()
             max_duration = gpu_config.max_duration_with_lm if use_lm else gpu_config.max_duration_without_lm
             if audio_duration is not None and float(audio_duration) > 0 and float(audio_duration) > max_duration:
