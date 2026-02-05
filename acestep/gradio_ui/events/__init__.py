@@ -394,6 +394,8 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["text2music_audio_code_string"],
             generation_section["repainting_start"],
             generation_section["repainting_end"],
+            generation_section["custom_track_name"],
+            generation_section["scratchpad"],
             generation_section["track_name"],
             generation_section["complete_track_classes"],
             generation_section["instrumental_checkbox"],  # Added: instrumental_checkbox
@@ -598,6 +600,8 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["lm_batch_chunk_size"],
             generation_section["track_name"],
             generation_section["complete_track_classes"],
+            generation_section["custom_track_name"],
+            generation_section["scratchpad"],
             generation_section["autogen_checkbox"],
             results_section["current_batch_index"],
             results_section["total_batches"],
@@ -785,6 +789,8 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["lm_batch_chunk_size"],
             generation_section["track_name"],
             generation_section["complete_track_classes"],
+            generation_section["custom_track_name"],
+            generation_section["scratchpad"],
         ],
         outputs=[results_section["generation_params_state"]]
     ).then(
@@ -892,6 +898,8 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["allow_lm_batch"],
             generation_section["track_name"],
             generation_section["complete_track_classes"],
+            generation_section["custom_track_name"],
+            generation_section["scratchpad"],
         ]
     )
     
@@ -970,6 +978,8 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["text2music_audio_code_string"],
             generation_section["repainting_start"],
             generation_section["repainting_end"],
+            generation_section["custom_track_name"],
+            generation_section["scratchpad"],
             generation_section["track_name"],
             generation_section["complete_track_classes"],
             generation_section["instrumental_checkbox"],

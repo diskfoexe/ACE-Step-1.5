@@ -227,6 +227,13 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                                 size="sm",
                             )
                     
+                    custom_track_name = gr.Textbox(
+                        label=t("generation.custom_track_name_label"),
+                        placeholder=t("generation.custom_track_name_placeholder"),
+                        info=t("generation.custom_track_name_info"),
+                        lines=1,
+                    )
+
                     track_name = gr.Dropdown(
                         choices=TRACK_NAMES,
                         value=None,
@@ -410,6 +417,15 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                             min_width=80,
                         )
                 
+                # Scratchpad
+                with gr.Accordion(t("generation.scratchpad_title"), open=False) as scratchpad_accordion:
+                    scratchpad = gr.Textbox(
+                        label=t("generation.scratchpad_label"),
+                        placeholder=t("generation.scratchpad_placeholder"),
+                        lines=5,
+                        info=t("generation.scratchpad_info"),
+                    )
+
                 # Optional Parameters
                 # In service mode: auto-expand
                 with gr.Accordion(t("generation.optional_params"), open=service_mode) as optional_params_accordion:
@@ -768,6 +784,8 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         "think_checkbox": think_checkbox,
         "autogen_checkbox": autogen_checkbox,
         "generate_btn": generate_btn,
+        "custom_track_name": custom_track_name,
+        "scratchpad": scratchpad,
         "instrumental_checkbox": instrumental_checkbox,
         "format_btn": format_btn,
         "constrained_decoding_debug": constrained_decoding_debug,
@@ -781,4 +799,3 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         "max_duration": max_duration,
         "max_batch_size": max_batch_size,
     }
-

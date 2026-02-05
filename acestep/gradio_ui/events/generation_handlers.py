@@ -165,6 +165,8 @@ def load_metadata(file_obj, llm_handler=None):
         audio_codes = metadata.get('audio_codes', '')
         repainting_start = metadata.get('repainting_start', 0.0)
         repainting_end = metadata.get('repainting_end', -1)
+        custom_track_name = metadata.get('custom_track_name', '')
+        scratchpad = metadata.get('scratchpad', '')
         track_name = metadata.get('track_name')
         complete_track_classes = metadata.get('complete_track_classes', [])
         shift = metadata.get('shift', 3.0)  # Default 3.0 for base models
@@ -184,16 +186,16 @@ def load_metadata(file_obj, llm_handler=None):
             audio_format, lm_temperature, lm_cfg_scale, lm_top_k, lm_top_p, lm_negative_prompt,
             use_cot_metas, use_cot_caption, use_cot_language, audio_cover_strength,
             think, audio_codes, repainting_start, repainting_end,
-            track_name, complete_track_classes, instrumental,
+            custom_track_name, scratchpad, track_name, complete_track_classes, instrumental,
             True  # Set is_format_caption to True when loading from file
         )
         
     except json.JSONDecodeError as e:
         gr.Warning(t("messages.invalid_json", error=str(e)))
-        return [None] * 36 + [False]
+        return [None] * 38 + [False]
     except Exception as e:
         gr.Warning(t("messages.load_error", error=str(e)))
-        return [None] * 36 + [False]
+        return [None] * 38 + [False]
 
 
 def load_random_example(task_type: str, llm_handler=None):

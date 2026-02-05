@@ -54,9 +54,9 @@
 ## 8. File Naming Convention
 **Problem:** Output files lack descriptive names (currently using UUIDs/Hashes).
 **Solution:**
-- [ ] Add a "Track Name" input field.
-- [ ] Implement naming convention: `Name_V1.1-inpaint_start{sec}:end{sec}`.
-- [ ] Ensure versioning (V1, V2...) or timestamps are used to prevent overwrites.
+- [x] Add a "Track Name" input field.
+- [x] Implement naming convention: `Name_V1.1-inpaint_start{sec}:end{sec}`.
+- [x] Ensure versioning (V1, V2...) or timestamps are used to prevent overwrites.
 
 ## 9. History Tab Improvements
 **Problem:** History tab functionality is basic.
@@ -77,4 +77,4 @@
 ## 11. Scratchpad
 **Problem:** No place to store lyrics or descriptions.
 **Solution:**
-- [ ] Add a "Scratchpad" area (text area) for storing text snippets/presets.
+- [x] Add a "Scratchpad" area (text area) for storing text snippets/presets.
