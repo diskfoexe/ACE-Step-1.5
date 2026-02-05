@@ -191,6 +191,9 @@ class AceStepHandler:
             self.lora_loaded = True
             self.use_lora = True  # Enable LoRA by default after loading
             
+            # Ensure decoder is patched for batch size mismatch (after loading LoRA)
+            self._ensure_decoder_patched()
+
             logger.info(f"LoRA adapter loaded successfully from {lora_path}")
             return f"✅ LoRA loaded from {lora_path}"
             
@@ -221,6 +224,9 @@ class AceStepHandler:
             self.use_lora = False
             self.lora_scale = 1.0  # Reset scale to default
             
+            # Ensure decoder is patched for batch size mismatch (after unloading LoRA)
+            self._ensure_decoder_patched()
+
             logger.info("LoRA unloaded, base decoder restored")
             return "✅ LoRA unloaded, using base model"
             
@@ -539,6 +545,9 @@ class AceStepHandler:
             status_msg += f"Offload to CPU: {self.offload_to_cpu}\n"
             status_msg += f"Offload DiT to CPU: {self.offload_dit_to_cpu}"
             
+            # Ensure decoder is patched for batch size mismatch
+            self._ensure_decoder_patched()
+
             return status_msg, True
             
         except Exception as e:
@@ -549,6 +558,53 @@ class AceStepHandler:
             logger.exception("[initialize_service] Error initializing model")
             return error_msg, False
     
+    def _ensure_decoder_patched(self):
+        """Ensure the decoder forward method is patched to handle batch size mismatches."""
+        if self.model is None or not hasattr(self.model, "decoder"):
+            return
+
+        decoder = self.model.decoder
+        # Avoid double patching
+        if getattr(decoder, "_is_patched_for_size_mismatch", False):
+            return
+
+        logger.info(f"[_ensure_decoder_patched] Patching decoder {type(decoder).__name__} forward method")
+
+        # Save original forward method
+        if hasattr(decoder, "_original_forward"):
+             original_forward = decoder._original_forward
+        else:
+             original_forward = decoder.forward
+             decoder._original_forward = original_forward
+
+        def patched_forward(hidden_states, *args, **kwargs):
+            # Check for context_latents in kwargs
+            context_latents = kwargs.get("context_latents")
+
+            # If mismatch in batch dimension (dim 0)
+            if context_latents is not None and isinstance(hidden_states, torch.Tensor) and isinstance(context_latents, torch.Tensor):
+                h_batch = hidden_states.shape[0]
+                c_batch = context_latents.shape[0]
+
+                if h_batch != c_batch:
+                    # Case 1: Hidden is N, Context is 2N (e.g. CFG context but non-CFG latents)
+                    # We slice Context to match Hidden (taking the second half, usually conditional)
+                    if c_batch == 2 * h_batch:
+                        logger.warning(f"[_ensure_decoder_patched] Batch size mismatch: hidden {h_batch}, context {c_batch}. Slicing context to second half.")
+                        kwargs["context_latents"] = context_latents[h_batch:]
+
+                    # Case 2: Hidden is 2N, Context is N (unlikely, but possible)
+                    elif h_batch == 2 * c_batch:
+                        logger.warning(f"[_ensure_decoder_patched] Batch size mismatch: hidden {h_batch}, context {c_batch}. Duplicating context.")
+                        kwargs["context_latents"] = torch.cat([context_latents, context_latents], dim=0)
+
+            return original_forward(hidden_states, *args, **kwargs)
+
+        # Assign closure directly to instance method (replaces the bound method)
+        # Note: original_forward is captured in the closure and maintains its bound 'self'
+        decoder.forward = patched_forward
+        decoder._is_patched_for_size_mismatch = True
+
     def _is_on_target_device(self, tensor, target_device):
         """Check if tensor is on the target device (handles cuda vs cuda:0 comparison)."""
         if tensor is None:
