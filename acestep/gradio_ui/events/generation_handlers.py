@@ -430,6 +430,8 @@ def update_model_type_settings(config_path):
         is_turbo = True
     elif "base" in config_path_lower:
         is_turbo = False
+    elif "sft" in config_path_lower:
+        is_turbo = False
     else:
         # Default to turbo settings for unknown model types
         is_turbo = True
@@ -495,7 +497,7 @@ def get_model_type_ui_settings(is_turbo: bool):
     if is_turbo:
         # Turbo model: max 20 steps, default 8, show shift with default 3.0, only show text2music/repaint/cover
         return (
-            gr.update(value=8, maximum=20, minimum=8, visible=True),  # inference_steps
+            gr.update(value=8, maximum=20, minimum=1, visible=True),  # inference_steps
             gr.update(visible=False),  # guidance_scale
             gr.update(visible=False),  # use_adg
             gr.update(value=3.0, visible=True),  # shift (show with default 3.0)
@@ -506,7 +508,7 @@ def get_model_type_ui_settings(is_turbo: bool):
     else:
         # Base model: max 200 steps, default 32, show CFG/ADG/shift, show all task types
         return (
-            gr.update(value=50, maximum=200, minimum=50, visible=True),  # inference_steps
+            gr.update(value=50, maximum=200, minimum=1, visible=True),  # inference_steps
             gr.update(visible=True),  # guidance_scale
             gr.update(visible=True),  # use_adg
             gr.update(value=3.0, visible=True),  # shift (effective for base, default 3.0)
