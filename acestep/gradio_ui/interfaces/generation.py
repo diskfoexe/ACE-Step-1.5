@@ -487,7 +487,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
             gr.HTML(f"<h4>{t('generation.dit_params_title') if t('generation.dit_params_title') != 'generation.dit_params_title' else 'DiT Parameters'}</h4>")
             with gr.Row():
                 inference_steps = gr.Slider(
-                    minimum=1,
+                    minimum=8,
                     maximum=20,
                     value=8,
                     step=1,
