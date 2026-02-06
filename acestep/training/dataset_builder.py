@@ -438,8 +438,14 @@ class DatasetBuilder:
             Duration in seconds (integer)
         """
         try:
-            info = torchaudio.info(audio_path)
-            return int(info.num_frames / info.sample_rate)
+            if hasattr(torchaudio, "info"):
+                info = torchaudio.info(audio_path)
+                return int(info.num_frames / info.sample_rate)
+            # Fallback for torchaudio versions that removed info()
+            waveform, sample_rate = torchaudio.load(audio_path)
+            if sample_rate <= 0:
+                return 0
+            return int(waveform.shape[-1] / sample_rate)
         except Exception as e:
             logger.warning(f"Failed to get duration for {audio_path}: {e}")
             return 0
@@ -943,6 +949,10 @@ class DatasetBuilder:
         silence_latent = dit_handler.silence_latent
         device = dit_handler.device
         dtype = dit_handler.dtype
+        # Resolve actual device placements (offload can put modules on CPU)
+        model_device = next(model.parameters()).device
+        vae_device = next(vae.parameters()).device
+        text_device = next(text_encoder.parameters()).device
 
         target_sample_rate = 48000
 
@@ -986,18 +996,18 @@ class DatasetBuilder:
                     audio = audio[:, :max_samples]
                 
                 # Add batch dimension: [2, T] -> [1, 2, T]
-                audio = audio.unsqueeze(0).to(device).to(vae.dtype)
+                audio = audio.unsqueeze(0).to(vae_device).to(vae.dtype)
                 
                 # Step 2: VAE encode audio to get target_latents
                 with torch.no_grad():
                     latent = vae.encode(audio).latent_dist.sample()
                     # [1, 64, T_latent] -> [1, T_latent, 64]
-                    target_latents = latent.transpose(1, 2).to(dtype)
+                    target_latents = latent.transpose(1, 2).to(model_device).to(dtype)
                 
                 latent_length = target_latents.shape[1]
                 
                 # Step 3: Create attention mask (all ones for valid audio)
-                attention_mask = torch.ones(1, latent_length, device=device, dtype=dtype)
+                attention_mask = torch.ones(1, latent_length, device=model_device, dtype=dtype)
 
                 # Step 4: Encode caption/genre text (per-sample override > global ratio)
                 # Use SFT_GEN_PROMPT format to match inference (handler.py)
@@ -1029,12 +1039,12 @@ class DatasetBuilder:
                     truncation=True,
                     return_tensors="pt",
                 )
-                text_input_ids = text_inputs.input_ids.to(device)
-                text_attention_mask = text_inputs.attention_mask.to(device).to(dtype)
+                text_input_ids = text_inputs.input_ids.to(text_device)
+                text_attention_mask = text_inputs.attention_mask.to(model_device).to(dtype)
 
                 with torch.no_grad():
                     text_outputs = text_encoder(text_input_ids)
-                    text_hidden_states = text_outputs.last_hidden_state.to(dtype)
+                    text_hidden_states = text_outputs.last_hidden_state.to(model_device).to(dtype)
                 
                 # Step 5: Encode lyrics
                 lyrics = sample.lyrics if sample.lyrics else "[Instrumental]"
@@ -1045,16 +1055,16 @@ class DatasetBuilder:
                     truncation=True,
                     return_tensors="pt",
                 )
-                lyric_input_ids = lyric_inputs.input_ids.to(device)
-                lyric_attention_mask = lyric_inputs.attention_mask.to(device).to(dtype)
+                lyric_input_ids = lyric_inputs.input_ids.to(text_device)
+                lyric_attention_mask = lyric_inputs.attention_mask.to(model_device).to(dtype)
                 
                 with torch.no_grad():
-                    lyric_hidden_states = text_encoder.embed_tokens(lyric_input_ids).to(dtype)
+                    lyric_hidden_states = text_encoder.embed_tokens(lyric_input_ids).to(model_device).to(dtype)
                 
                 # Step 6: Prepare refer_audio (empty for text2music)
                 # Create minimal refer_audio placeholder
-                refer_audio_hidden = torch.zeros(1, 1, 64, device=device, dtype=dtype)
-                refer_audio_order_mask = torch.zeros(1, device=device, dtype=torch.long)
+                refer_audio_hidden = torch.zeros(1, 1, 64, device=model_device, dtype=dtype)
+                refer_audio_order_mask = torch.zeros(1, device=model_device, dtype=torch.long)
                 
                 # Step 7: Run model.encoder to get encoder_hidden_states
                 with torch.no_grad():
@@ -1072,7 +1082,7 @@ class DatasetBuilder:
                 # chunk_masks: 1 = generate, 0 = keep original
                 # IMPORTANT: chunk_masks must have same shape as src_latents [B, T, 64]
                 # For text2music, we want to generate the entire audio, so chunk_masks = all 1s
-                src_latents = silence_latent[:, :latent_length, :].to(dtype)
+                src_latents = silence_latent[:, :latent_length, :].to(model_device).to(dtype)
                 if src_latents.shape[0] < 1:
                     src_latents = src_latents.expand(1, -1, -1)
                 
@@ -1081,7 +1091,7 @@ class DatasetBuilder:
                     pad_len = latent_length - src_latents.shape[1]
                     src_latents = torch.cat([
                         src_latents,
-                        silence_latent[:, :pad_len, :].expand(1, -1, -1).to(dtype)
+                        silence_latent[:, :pad_len, :].expand(1, -1, -1).to(model_device).to(dtype)
                     ], dim=1)
                 elif src_latents.shape[1] > latent_length:
                     src_latents = src_latents[:, :latent_length, :]
@@ -1089,7 +1099,7 @@ class DatasetBuilder:
                 # chunk_masks = 1 means "generate this region", 0 = keep original
                 # Shape must match src_latents: [B, T, 64] (NOT [B, T, 1])
                 # For text2music, generate everything -> all 1s with shape [1, T, 64]
-                chunk_masks = torch.ones(1, latent_length, 64, device=device, dtype=dtype)
+                chunk_masks = torch.ones(1, latent_length, 64, device=model_device, dtype=dtype)
                 # context_latents = [src_latents, chunk_masks] -> [B, T, 128]
                 context_latents = torch.cat([src_latents, chunk_masks], dim=-1)
                 

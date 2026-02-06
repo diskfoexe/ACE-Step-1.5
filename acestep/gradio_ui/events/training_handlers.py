@@ -486,6 +486,7 @@ def start_training(
     training_shift: float,
     training_seed: int,
     lora_output_dir: str,
+    resume_checkpoint_dir: str,
     training_state: Dict,
     progress=None,
 ):
@@ -529,6 +530,8 @@ def start_training(
             dropout=lora_dropout,
         )
         
+        device_str = str(getattr(dit_handler, "device", ""))
+        pin_memory_device = "cuda" if device_str.startswith("cuda") else None
         training_config = TrainingConfig(
             shift=training_shift,
             learning_rate=learning_rate,
@@ -538,6 +541,7 @@ def start_training(
             save_every_n_epochs=save_every_n_epochs,
             seed=training_seed,
             output_dir=lora_output_dir,
+            pin_memory_device=pin_memory_device,
         )
         
         import pandas as pd
@@ -563,7 +567,8 @@ def start_training(
         loss_list = []
         
         # Train with progress updates using preprocessed tensors
-        for step, loss, status in trainer.train_from_preprocessed(tensor_dir, training_state):
+        resume_from = resume_checkpoint_dir.strip() if resume_checkpoint_dir and resume_checkpoint_dir.strip() else None
+        for step, loss, status in trainer.train_from_preprocessed(tensor_dir, training_state, resume_from=resume_from):
             # Calculate elapsed time and ETA
             elapsed_seconds = time.time() - start_time
             time_info = f"⏱️ Elapsed: {_format_duration(elapsed_seconds)}"

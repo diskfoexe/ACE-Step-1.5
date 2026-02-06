@@ -2,6 +2,7 @@
 Gradio UI Generation Section Module
 Contains generation section component definitions
 """
+import sys
 import gradio as gr
 from acestep.constants import (
     VALID_LANGUAGES,
@@ -175,8 +176,10 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                     value=compile_model_value,
                     info=t("service.compile_model_info")
                 )
-                # Set quantization value from init_params if pre-initialized (default True for int8_weight_only)
-                quantization_value = init_params.get('quantization', True) if service_pre_initialized else True
+                # Set quantization value from init_params if pre-initialized.
+                # Default to False on macOS to avoid torchao incompatibilities.
+                default_quantization = False if sys.platform == "darwin" else True
+                quantization_value = init_params.get('quantization', default_quantization) if service_pre_initialized else default_quantization
                 quantization_checkbox = gr.Checkbox(
                     label=t("service.quantization_label"),
                     value=quantization_value,

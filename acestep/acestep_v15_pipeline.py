@@ -120,6 +120,12 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--server-name", type=str, default="127.0.0.1", help="Server name (default: 127.0.0.1, use 0.0.0.0 for all interfaces)")
     parser.add_argument("--language", type=str, default="en", choices=["en", "zh", "ja"], help="UI language: en (English), zh (中文), ja (日本語)")
+    parser.add_argument(
+        "--allowed-path",
+        action="append",
+        default=[],
+        help="Additional allowed file paths for Gradio (repeatable).",
+    )
     
     # Service mode argument
     parser.add_argument("--service_mode", type=lambda x: x.lower() in ['true', '1', 'yes'], default=False, 
@@ -334,6 +340,7 @@ def main():
                 prevent_thread_lock=True,  # Don't block, so we can add routes
                 inbrowser=False,
                 auth=auth,
+                allowed_paths=args.allowed_path,
             )
 
             # Now add API routes to Gradio's FastAPI app (app is available after launch)
@@ -360,6 +367,7 @@ def main():
                 prevent_thread_lock=False,
                 inbrowser=False,
                 auth=auth,
+                allowed_paths=args.allowed_path,
             )
     except Exception as e:
         print(f"Error launching Gradio: {e}", file=sys.stderr)

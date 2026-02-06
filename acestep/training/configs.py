@@ -81,6 +81,9 @@ class TrainingConfig:
     # Data loading
     num_workers: int = 4
     pin_memory: bool = True
+    prefetch_factor: int = 2
+    persistent_workers: bool = True
+    pin_memory_device: Optional[str] = None
     
     # Logging
     log_every_n_steps: int = 10
@@ -103,5 +106,8 @@ class TrainingConfig:
             "output_dir": self.output_dir,
             "num_workers": self.num_workers,
             "pin_memory": self.pin_memory,
+            "prefetch_factor": self.prefetch_factor,
+            "persistent_workers": self.persistent_workers,
+            "pin_memory_device": self.pin_memory_device,
             "log_every_n_steps": self.log_every_n_steps,
         }

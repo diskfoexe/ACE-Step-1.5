@@ -1127,10 +1127,10 @@ def setup_training_event_handlers(demo, dit_handler, llm_handler, training_secti
     )
     
     # Start training from preprocessed tensors
-    def training_wrapper(tensor_dir, r, a, d, lr, ep, bs, ga, se, sh, sd, od, ts):
+    def training_wrapper(tensor_dir, r, a, d, lr, ep, bs, ga, se, sh, sd, od, rc, ts):
         try:
             for progress, log, plot, state in train_h.start_training(
-                tensor_dir, dit_handler, r, a, d, lr, ep, bs, ga, se, sh, sd, od, ts
+                tensor_dir, dit_handler, r, a, d, lr, ep, bs, ga, se, sh, sd, od, rc, ts
             ):
                 yield progress, log, plot, state
         except Exception as e:
@@ -1152,6 +1152,7 @@ def setup_training_event_handlers(demo, dit_handler, llm_handler, training_secti
             training_section["training_shift"],
             training_section["training_seed"],
             training_section["lora_output_dir"],
+            training_section["resume_checkpoint_dir"],
             training_section["training_state"],
         ],
         outputs=[

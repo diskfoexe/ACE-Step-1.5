@@ -175,6 +175,9 @@ class PreprocessedDataModule(LightningDataModule if LIGHTNING_AVAILABLE else obj
         batch_size: int = 1,
         num_workers: int = 4,
         pin_memory: bool = True,
+        prefetch_factor: int = 2,
+        persistent_workers: bool = True,
+        pin_memory_device: Optional[str] = None,
         val_split: float = 0.0,
     ):
         """Initialize the data module.
@@ -193,6 +196,9 @@ class PreprocessedDataModule(LightningDataModule if LIGHTNING_AVAILABLE else obj
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
+        self.prefetch_factor = prefetch_factor
+        self.persistent_workers = persistent_workers
+        self.pin_memory_device = pin_memory_device
         self.val_split = val_split
         
         self.train_dataset = None
@@ -218,28 +224,39 @@ class PreprocessedDataModule(LightningDataModule if LIGHTNING_AVAILABLE else obj
     
     def train_dataloader(self) -> DataLoader:
         """Create training dataloader."""
+        prefetch_factor = None if self.num_workers == 0 else self.prefetch_factor
+        persistent_workers = False if self.num_workers == 0 else self.persistent_workers
+        pin_memory_device = self.pin_memory_device if self.pin_memory else None
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            pin_memory_device=pin_memory_device,
             collate_fn=collate_preprocessed_batch,
             drop_last=True,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
         )
     
     def val_dataloader(self) -> Optional[DataLoader]:
         """Create validation dataloader."""
         if self.val_dataset is None:
             return None
-        
+        prefetch_factor = None if self.num_workers == 0 else self.prefetch_factor
+        persistent_workers = False if self.num_workers == 0 else self.persistent_workers
+        pin_memory_device = self.pin_memory_device if self.pin_memory else None
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            pin_memory_device=pin_memory_device,
             collate_fn=collate_preprocessed_batch,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
         )
 
 

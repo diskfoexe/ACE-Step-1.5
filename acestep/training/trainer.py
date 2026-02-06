@@ -13,6 +13,7 @@ from loguru import logger
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from contextlib import nullcontext
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LinearLR, SequentialLR
 
@@ -39,7 +40,7 @@ from acestep.training.data_module import PreprocessedDataModule
 TURBO_SHIFT3_TIMESTEPS = [1.0, 0.9545454545454546, 0.9, 0.8333333333333334, 0.75, 0.6428571428571429, 0.5, 0.3]
 
 
-def sample_discrete_timestep(bsz, device, dtype):
+def sample_discrete_timestep(bsz, timesteps_tensor):
     """Sample timesteps from discrete turbo shift=3 schedule.
     
     For each sample in the batch, randomly select one of the 8 discrete timesteps
@@ -54,10 +55,7 @@ def sample_discrete_timestep(bsz, device, dtype):
         Tuple of (t, r) where both are the same sampled timestep
     """
     # Randomly select indices for each sample in batch
-    indices = torch.randint(0, len(TURBO_SHIFT3_TIMESTEPS), (bsz,), device=device)
-    
-    # Convert to tensor and index
-    timesteps_tensor = torch.tensor(TURBO_SHIFT3_TIMESTEPS, device=device, dtype=dtype)
+    indices = torch.randint(0, timesteps_tensor.shape[0], (bsz,), device=timesteps_tensor.device)
     t = timesteps_tensor[indices]
     
     # r = t for this training setup
@@ -100,8 +98,9 @@ class PreprocessedLoRAModule(nn.Module):
         
         self.lora_config = lora_config
         self.training_config = training_config
-        self.device = device
+        self.device = torch.device(device) if isinstance(device, str) else device
         self.dtype = dtype
+        self.timesteps_tensor = torch.tensor(TURBO_SHIFT3_TIMESTEPS, device=self.device, dtype=dtype)
         
         # Inject LoRA into the decoder only
         if check_peft_available():
@@ -134,14 +133,18 @@ class PreprocessedLoRAModule(nn.Module):
         Returns:
             Loss tensor (float32 for stable backward)
         """
-        # Use autocast for bf16 mixed precision training
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+        # Use autocast for bf16 mixed precision training (CUDA only)
+        if self.device.type == "cuda":
+            autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        else:
+            autocast_ctx = nullcontext()
+        with autocast_ctx:
             # Get tensors from batch (already on device from Fabric dataloader)
-            target_latents = batch["target_latents"].to(self.device)  # x0
-            attention_mask = batch["attention_mask"].to(self.device)
-            encoder_hidden_states = batch["encoder_hidden_states"].to(self.device)
-            encoder_attention_mask = batch["encoder_attention_mask"].to(self.device)
-            context_latents = batch["context_latents"].to(self.device)
+            target_latents = batch["target_latents"].to(self.device, non_blocking=True)  # x0
+            attention_mask = batch["attention_mask"].to(self.device, non_blocking=True)
+            encoder_hidden_states = batch["encoder_hidden_states"].to(self.device, non_blocking=True)
+            encoder_attention_mask = batch["encoder_attention_mask"].to(self.device, non_blocking=True)
+            context_latents = batch["context_latents"].to(self.device, non_blocking=True)
             
             bsz = target_latents.shape[0]
             
@@ -150,7 +153,7 @@ class PreprocessedLoRAModule(nn.Module):
             x0 = target_latents  # Data
             
             # Sample timesteps from discrete turbo shift=3 schedule (8 steps)
-            t, r = sample_discrete_timestep(bsz, self.device, torch.bfloat16)
+            t, r = sample_discrete_timestep(bsz, self.timesteps_tensor)
             t_ = t.unsqueeze(-1).unsqueeze(-1)
             
             # Interpolate: x_t = t * x1 + (1 - t) * x0
@@ -312,11 +315,13 @@ class LoRATrainer:
         
         yield 0, 0.0, f"🎯 Training {sum(p.numel() for p in trainable_params):,} parameters"
         
-        optimizer = AdamW(
-            trainable_params,
-            lr=self.training_config.learning_rate,
-            weight_decay=self.training_config.weight_decay,
-        )
+        optimizer_kwargs = {
+            "lr": self.training_config.learning_rate,
+            "weight_decay": self.training_config.weight_decay,
+        }
+        if self.module.device.type == "cuda":
+            optimizer_kwargs["fused"] = True
+        optimizer = AdamW(trainable_params, **optimizer_kwargs)
         
         # Calculate total steps
         total_steps = len(train_loader) * self.training_config.max_epochs // self.training_config.gradient_accumulation_steps
@@ -452,10 +457,9 @@ class LoRATrainer:
                     
                     # Log
                     avg_loss = accumulated_loss / accumulation_step
-                    self.fabric.log("train/loss", avg_loss, step=global_step)
-                    self.fabric.log("train/lr", scheduler.get_last_lr()[0], step=global_step)
-                    
                     if global_step % self.training_config.log_every_n_steps == 0:
+                        self.fabric.log("train/loss", avg_loss, step=global_step)
+                        self.fabric.log("train/lr", scheduler.get_last_lr()[0], step=global_step)
                         yield global_step, avg_loss, f"Epoch {epoch+1}/{self.training_config.max_epochs}, Step {global_step}, Loss: {avg_loss:.4f}"
                     
                     epoch_loss += accumulated_loss
