@@ -2,16 +2,23 @@
 GPU Configuration Module
 Centralized GPU memory detection and adaptive configuration management
 
+Supports CUDA, Intel XPU, and Apple MPS (Metal Performance Shaders) backends.
+
+For MPS (Apple Silicon), GPU memory is detected via the macOS iogpu.wired_limit_mb
+sysctl, which reports the unified memory budget allocated for GPU use. Since MPS
+shares system RAM, tier thresholds are higher than for dedicated CUDA GPUs.
+
 Debug Mode:
     Set environment variable MAX_CUDA_VRAM to simulate different GPU memory sizes.
     Example: MAX_CUDA_VRAM=8 python acestep  # Simulates 8GB GPU
-    
+
     This is useful for testing GPU tier configurations on high-end hardware.
 """
 
 import os
+import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
 from loguru import logger
 
@@ -30,21 +37,24 @@ class GPUConfig:
     """GPU configuration based on available memory"""
     tier: str  # "tier1", "tier2", etc. or "unlimited"
     gpu_memory_gb: float
-    
+
     # Duration limits (in seconds)
     max_duration_with_lm: int  # When LM is initialized
     max_duration_without_lm: int  # When LM is not initialized
-    
+
     # Batch size limits
     max_batch_size_with_lm: int
     max_batch_size_without_lm: int
-    
+
     # LM configuration
     init_lm_default: bool  # Whether to initialize LM by default
     available_lm_models: List[str]  # Available LM models for this tier
-    
+
     # LM memory allocation (GB) for each model size
     lm_memory_gb: Dict[str, float]  # e.g., {"0.6B": 3, "1.7B": 8, "4B": 12}
+
+    # Device type: "cuda", "mps", "xpu", or "cpu"
+    device_type: str = "cpu"
 
 
 # GPU tier configurations
@@ -115,57 +125,113 @@ GPU_TIER_CONFIGS = {
 }
 
 
-def get_gpu_memory_gb() -> float:
+def _get_mps_wired_limit_mb() -> Optional[int]:
+    """Read iogpu.wired_limit_mb on macOS as a proxy for MPS GPU memory budget."""
+    try:
+        out = subprocess.check_output(
+            ["sysctl", "iogpu.wired_limit_mb"], text=True
+        ).strip()
+        # Expected format: "iogpu.wired_limit_mb: 12345"
+        parts = out.split(":")
+        if len(parts) == 2:
+            return int(parts[1].strip())
+    except Exception:
+        pass
+    return None
+
+
+def is_mps_available() -> bool:
+    """Check whether Apple MPS backend is available."""
+    try:
+        import torch
+        return hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    except Exception:
+        return False
+
+
+def get_device_type() -> str:
+    """Detect the best available accelerator backend.
+
+    Returns:
+        One of "cuda", "xpu", "mps", or "cpu".
     """
-    Get GPU memory in GB. Returns 0 if no GPU is available.
-    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            return "xpu"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def get_gpu_memory_gb() -> Tuple[float, str]:
+    """
+    Get GPU memory in GB and the device type.
+
+    Returns:
+        Tuple of (memory_gb, device_type).  memory_gb is 0 when no GPU is found.
+
     Debug Mode:
         Set environment variable MAX_CUDA_VRAM to override the detected GPU memory.
         Example: MAX_CUDA_VRAM=8 python acestep  # Simulates 8GB GPU
-        
+
         This allows testing different GPU tier configurations on high-end hardware.
     """
+    device_type = get_device_type()
+
     # Check for debug override first
     debug_vram = os.environ.get(DEBUG_MAX_CUDA_VRAM_ENV)
     if debug_vram is not None:
         try:
             simulated_gb = float(debug_vram)
-            logger.warning(f"⚠️ DEBUG MODE: Simulating GPU memory as {simulated_gb:.1f}GB (set via {DEBUG_MAX_CUDA_VRAM_ENV} environment variable)")
-            return simulated_gb
+            logger.warning(
+                f"DEBUG MODE: Simulating GPU memory as {simulated_gb:.1f}GB "
+                f"(set via {DEBUG_MAX_CUDA_VRAM_ENV} environment variable)"
+            )
+            return simulated_gb, device_type
         except ValueError:
             logger.warning(f"Invalid {DEBUG_MAX_CUDA_VRAM_ENV} value: {debug_vram}, ignoring")
-    
+
     try:
         import torch
-        if torch.cuda.is_available():
-            # Get total memory of the first GPU in GB
+
+        if device_type == "cuda":
             total_memory = torch.cuda.get_device_properties(0).total_memory
-            memory_gb = total_memory / (1024**3)  # Convert bytes to GB
-            return memory_gb
-        elif hasattr(torch, 'xpu') and torch.xpu.is_available():
-            # Get total memory of the first XPU in GB
+            return total_memory / (1024**3), "cuda"
+
+        if device_type == "xpu":
             total_memory = torch.xpu.get_device_properties(0).total_memory
-            memory_gb = total_memory / (1024**3)  # Convert bytes to GB
-            return memory_gb
-        else:
-            return 0
+            return total_memory / (1024**3), "xpu"
+
+        if device_type == "mps":
+            wired_limit_mb = _get_mps_wired_limit_mb()
+            if wired_limit_mb is not None and wired_limit_mb > 0:
+                memory_gb = wired_limit_mb / 1024.0
+                logger.info(
+                    f"MPS detected — using iogpu.wired_limit_mb ({wired_limit_mb} MB "
+                    f"= {memory_gb:.1f} GB) as GPU memory budget"
+                )
+                return memory_gb, "mps"
+            # wired_limit_mb unavailable; fall back to 0 so caller knows
+            logger.warning(
+                "MPS is available but iogpu.wired_limit_mb could not be read. "
+                "GPU memory budget unknown — defaulting to conservative tier."
+            )
+            return 0, "mps"
+
     except Exception as e:
         logger.warning(f"Failed to detect GPU memory: {e}")
-        return 0
+
+    return 0, device_type
 
 
-def get_gpu_tier(gpu_memory_gb: float) -> str:
-    """
-    Determine GPU tier based on available memory.
-    
-    Args:
-        gpu_memory_gb: GPU memory in GB
-        
-    Returns:
-        Tier string: "tier1", "tier2", "tier3", "tier4", "tier5", "tier6", or "unlimited"
-    """
+def _get_gpu_tier_cuda(gpu_memory_gb: float) -> str:
+    """Tier thresholds for dedicated-VRAM devices (CUDA / XPU)."""
     if gpu_memory_gb <= 0:
-        # CPU mode - use tier1 limits
         return "tier1"
     elif gpu_memory_gb <= 4:
         return "tier1"
@@ -185,22 +251,77 @@ def get_gpu_tier(gpu_memory_gb: float) -> str:
         return "unlimited"
 
 
-def get_gpu_config(gpu_memory_gb: Optional[float] = None) -> GPUConfig:
+def _get_gpu_tier_mps(gpu_memory_gb: float) -> str:
+    """Tier thresholds for MPS (Apple Silicon unified memory).
+
+    MPS shares system RAM with the CPU, so the wired-limit values are much
+    larger than dedicated VRAM on discrete GPUs.  The thresholds below map
+    typical Apple Silicon configs to equivalent capability tiers:
+
+        <= 24 GB  ->  tier1   (e.g. 16 GB Mac with ~18 GB wired limit)
+        <= 32 GB  ->  tier2   (e.g. 24 GB Mac)
+        <= 40 GB  ->  tier3   (e.g. 32 GB Mac)
+        <= 48 GB  ->  tier4   (e.g. 36-48 GB Mac)
+        <= 56 GB  ->  tier5
+        <= 64 GB  ->  tier6   (e.g. 64 GB Mac)
+        >  64 GB  ->  unlimited (e.g. 96/128/192 GB Mac)
+    """
+    if gpu_memory_gb <= 0:
+        return "tier1"
+    elif gpu_memory_gb <= 24:
+        return "tier1"
+    elif gpu_memory_gb <= 32:
+        return "tier2"
+    elif gpu_memory_gb <= 40:
+        return "tier3"
+    elif gpu_memory_gb <= 48:
+        return "tier4"
+    elif gpu_memory_gb <= 56:
+        return "tier5"
+    elif gpu_memory_gb <= 64:
+        return "tier6"
+    else:
+        return "unlimited"
+
+
+def get_gpu_tier(gpu_memory_gb: float, device_type: str = "cuda") -> str:
+    """
+    Determine GPU tier based on available memory and device type.
+
+    Args:
+        gpu_memory_gb: GPU memory in GB
+        device_type: "cuda", "xpu", "mps", or "cpu"
+
+    Returns:
+        Tier string: "tier1" through "tier6", or "unlimited"
+    """
+    if device_type == "mps":
+        return _get_gpu_tier_mps(gpu_memory_gb)
+    return _get_gpu_tier_cuda(gpu_memory_gb)
+
+
+def get_gpu_config(gpu_memory_gb: Optional[float] = None, device_type: Optional[str] = None) -> GPUConfig:
     """
     Get GPU configuration based on detected or provided GPU memory.
-    
+
     Args:
         gpu_memory_gb: GPU memory in GB. If None, will be auto-detected.
-        
+        device_type: Device backend ("cuda", "mps", "xpu", "cpu").
+                     If None, will be auto-detected.
+
     Returns:
         GPUConfig object with all configuration parameters
     """
-    if gpu_memory_gb is None:
-        gpu_memory_gb = get_gpu_memory_gb()
-    
-    tier = get_gpu_tier(gpu_memory_gb)
+    if gpu_memory_gb is None or device_type is None:
+        detected_mem, detected_dev = get_gpu_memory_gb()
+        if gpu_memory_gb is None:
+            gpu_memory_gb = detected_mem
+        if device_type is None:
+            device_type = detected_dev
+
+    tier = get_gpu_tier(gpu_memory_gb, device_type)
     config = GPU_TIER_CONFIGS[tier]
-    
+
     return GPUConfig(
         tier=tier,
         gpu_memory_gb=gpu_memory_gb,
@@ -211,6 +332,7 @@ def get_gpu_config(gpu_memory_gb: Optional[float] = None) -> GPUConfig:
         init_lm_default=config["init_lm_default"],
         available_lm_models=config["available_lm_models"],
         lm_memory_gb=config["lm_memory_gb"],
+        device_type=device_type,
     )
 
 
@@ -378,6 +500,7 @@ def get_recommended_lm_model(gpu_config: GPUConfig) -> Optional[str]:
 def print_gpu_config_info(gpu_config: GPUConfig):
     """Print GPU configuration information for debugging."""
     logger.info(f"GPU Configuration:")
+    logger.info(f"  - Device Type: {gpu_config.device_type}")
     logger.info(f"  - GPU Memory: {gpu_config.gpu_memory_gb:.1f} GB")
     logger.info(f"  - Tier: {gpu_config.tier}")
     logger.info(f"  - Max Duration (with LM): {gpu_config.max_duration_with_lm}s ({gpu_config.max_duration_with_lm // 60} min)")
@@ -386,6 +509,11 @@ def print_gpu_config_info(gpu_config: GPUConfig):
     logger.info(f"  - Max Batch Size (without LM): {gpu_config.max_batch_size_without_lm}")
     logger.info(f"  - Init LM by Default: {gpu_config.init_lm_default}")
     logger.info(f"  - Available LM Models: {gpu_config.available_lm_models or 'None'}")
+    if gpu_config.device_type == "mps":
+        wired_mb = _get_mps_wired_limit_mb()
+        if wired_mb is not None:
+            logger.info(f"  - MPS Wired Limit: {wired_mb} MB")
+        logger.info("  - Note: MPS uses unified memory; tier thresholds are higher than CUDA")
 
 
 # Global GPU config instance (initialized lazily)

@@ -2569,7 +2569,7 @@ class AceStepHandler:
         """
         # Default values for 48kHz audio, adaptive to GPU memory
         if chunk_size is None:
-            gpu_memory = get_gpu_memory_gb()
+            gpu_memory, _ = get_gpu_memory_gb()
             if gpu_memory <= 8:
                 chunk_size = 48000 * 15  # 15 seconds for low VRAM (<4GB)
             else:
