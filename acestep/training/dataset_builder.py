@@ -1,11 +1,7 @@
-"""
-Dataset Builder for LoRA Training
+﻿"""
+Dataset Builder for LoRA Training (facade).
 
-Provides functionality to:
-1. Scan directories for audio files
-2. Auto-label audio using LLM
-3. Preview and edit metadata
-4. Save datasets in JSON format
+This module preserves the public API while delegating to smaller modules.
 """
 
 import os

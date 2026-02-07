@@ -83,6 +83,7 @@ class AceStepHandler:
         self.custom_layers_config = {2: [6], 3: [10, 11], 4: [3], 5: [8, 9], 6: [8]}
         self.offload_to_cpu = False
         self.offload_dit_to_cpu = False
+        self.compiled = False
         self.current_offload_cost = 0.0
         self.disable_tqdm = os.environ.get("ACESTEP_DISABLE_TQDM", "").lower() in ("1", "true", "yes") or not sys.stderr.isatty()
         self.debug_stats = os.environ.get("ACESTEP_DEBUG_STATS", "").lower() in ("1", "true", "yes")
@@ -393,8 +394,13 @@ class AceStepHandler:
             self.device = device
             self.offload_to_cpu = offload_to_cpu
             self.offload_dit_to_cpu = offload_dit_to_cpu
-            # Set dtype based on device: bfloat16 for cuda, float32 for cpu
-            self.dtype = torch.bfloat16 if device in ["cuda","xpu"] else torch.float32
+            self.compiled = compile_model
+            # Set dtype based on device: bfloat16 for cuda/xpu/mps, float32 for cpu
+            # Models are trained in bfloat16; MPS supports bfloat16 natively since PyTorch 2.3+
+            if device in ["cuda", "xpu", "mps"]:
+                self.dtype = torch.bfloat16
+            else:
+                self.dtype = torch.float32
             self.quantization = quantization
             if self.quantization is not None:
                 assert compile_model, "Quantization requires compile_model to be True"
@@ -573,6 +579,41 @@ class AceStepHandler:
             logger.exception("[initialize_service] Error initializing model")
             return error_msg, False
     
+    def _empty_cache(self):
+        """Clear accelerator memory cache (CUDA, XPU, or MPS)."""
+        device_type = self.device if isinstance(self.device, str) else self.device.type
+        if device_type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif device_type == "xpu" and hasattr(torch, 'xpu') and torch.xpu.is_available():
+            torch.xpu.empty_cache()
+        elif device_type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
+    def _synchronize(self):
+        """Synchronize accelerator operations (CUDA, XPU, or MPS)."""
+        device_type = self.device if isinstance(self.device, str) else self.device.type
+        if device_type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elif device_type == "xpu" and hasattr(torch, 'xpu') and torch.xpu.is_available():
+            torch.xpu.synchronize()
+        elif device_type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.synchronize()
+
+    def _memory_allocated(self):
+        """Get current accelerator memory usage in bytes, or 0 for unsupported backends."""
+        device_type = self.device if isinstance(self.device, str) else self.device.type
+        if device_type == "cuda" and torch.cuda.is_available():
+            return torch.cuda.memory_allocated()
+        # MPS and XPU don't expose per-tensor memory tracking
+        return 0
+
+    def _max_memory_allocated(self):
+        """Get peak accelerator memory usage in bytes, or 0 for unsupported backends."""
+        device_type = self.device if isinstance(self.device, str) else self.device.type
+        if device_type == "cuda" and torch.cuda.is_available():
+            return torch.cuda.max_memory_allocated()
+        return 0
+
     def _is_on_target_device(self, tensor, target_device):
         """Check if tensor is on the target device (handles cuda vs cuda:0 comparison)."""
         if tensor is None:
@@ -1303,7 +1344,9 @@ class AceStepHandler:
     def _get_vae_dtype(self, device: Optional[str] = None) -> torch.dtype:
         """Get VAE dtype based on device."""
         device = device or self.device
-        return torch.bfloat16 if device in ["cuda", "xpu"] else self.dtype
+        if device in ["cuda", "xpu", "mps"]:
+            return torch.bfloat16
+        return self.dtype
     
     def _format_instruction(self, instruction: str) -> str:
         """Format instruction to ensure it ends with colon."""
@@ -3263,6 +3306,12 @@ class AceStepHandler:
                     if pred_wavs.dtype != torch.float32:
                         pred_wavs = pred_wavs.float()
                     
+                    # Anti-clipping normalization: scale down audio that exceeds [-1, 1] range
+                    # Uses 5*std as an estimate of peak amplitude; if already within range, leave unchanged
+                    std = torch.std(pred_wavs, dim=[1, 2], keepdim=True) * 5.0
+                    std[std < 1.0] = 1.0
+                    pred_wavs /= std
+                    
                     self._empty_cache()
             end_time = time.time()
             time_costs["vae_decode_time_cost"] = end_time - start_time
@@ -3422,8 +3471,10 @@ class AceStepHandler:
             if seed is None:
                 x0 = torch.randn_like(x1)
             else:
-                generator = torch.Generator(device=device).manual_seed(int(seed))
-                x0 = torch.randn(x1.shape, generator=generator, device=device, dtype=dtype)
+                # MPS doesn't support torch.Generator(device="mps"); use CPU generator and move result
+                gen_device = "cpu" if (isinstance(device, str) and device == "mps") or (hasattr(device, 'type') and device.type == "mps") else device
+                generator = torch.Generator(device=gen_device).manual_seed(int(seed))
+                x0 = torch.randn(x1.shape, generator=generator, device=gen_device, dtype=dtype).to(device)
             
             # Add noise to pred_latent: xt = t * noise + (1 - t) * x1
             xt = t_last_val * x0 + (1.0 - t_last_val) * x1
@@ -3628,8 +3679,10 @@ class AceStepHandler:
             if seed is None:
                 x0 = torch.randn_like(pred_latent)
             else:
-                generator = torch.Generator(device=device).manual_seed(int(seed))
-                x0 = torch.randn(pred_latent.shape, generator=generator, device=device, dtype=dtype)
+                # MPS doesn't support torch.Generator(device="mps"); use CPU generator and move result
+                gen_device = "cpu" if (isinstance(device, str) and device == "mps") or (hasattr(device, 'type') and device.type == "mps") else device
+                generator = torch.Generator(device=gen_device).manual_seed(int(seed))
+                x0 = torch.randn(pred_latent.shape, generator=generator, device=gen_device, dtype=dtype).to(device)
 
             # --- Input A: LM Score ---
             # t = 1.0, xt = Pure Noise

@@ -280,7 +280,8 @@ class LLMHandler:
         """Apply top-p (nucleus) filtering to logits"""
         if top_p is not None and 0.0 < top_p < 1.0:
             sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-            cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+            # Upcast to float32 for stable softmax/cumsum (critical for float16/MPS)
+            cumulative_probs = torch.cumsum(torch.softmax(sorted_logits.float(), dim=-1), dim=-1)
             sorted_indices_to_remove = cumulative_probs > top_p
             sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
             sorted_indices_to_remove[..., 0] = 0
@@ -289,9 +290,14 @@ class LLMHandler:
         return logits
     
     def _sample_tokens(self, logits: torch.Tensor, temperature: float) -> torch.Tensor:
-        """Sample tokens from logits with temperature"""
+        """Sample tokens from logits with temperature.
+        
+        Upcasts to float32 for numerical stability (float16 logits can overflow
+        during softmax, especially after CFG scaling).
+        """
         if temperature > 0:
-            logits = logits / temperature
+            # Upcast to float32 for stable softmax (critical for float16/MPS)
+            logits = logits.float() / temperature
             probs = torch.softmax(logits, dim=-1)
             return torch.multinomial(probs, num_samples=1).squeeze(1)
         else:
@@ -375,6 +381,8 @@ class LLMHandler:
                     device = "mps"
                 elif hasattr(torch, 'xpu') and torch.xpu.is_available():
                     device = "xpu"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    device = "mps"
                 else:
                     device = "cpu"
             elif device == "cuda" and not torch.cuda.is_available():
@@ -413,9 +421,17 @@ class LLMHandler:
             if backend == "vllm" and device != "cuda":
                 logger.warning(f"[initialize] vllm backend requires CUDA. Falling back to PyTorch backend for device={device}.")
                 backend = "pt"
-            # Set dtype based on device: bfloat16 for cuda, float32 for cpu
+           
+            # Set dtype based on device: bfloat16 for cuda/xpu, float32 for mps/cpu
+            # Note: LLM stays in float32 on MPS because autoregressive generation is
+            # latency-bound (not compute-bound), and many LLM weights trained in bfloat16
+            # produce NaN/inf when naively converted to float16 (different exponent range).
+            # The DiT and VAE use float16 on MPS where it actually helps throughput.
             if dtype is None:
-                self.dtype = torch.bfloat16 if device in ["cuda", "xpu"] else torch.float32
+                if device in ["cuda", "xpu"]:
+                    self.dtype = torch.bfloat16
+                else:
+                    self.dtype = torch.float32
             else:
                 self.dtype = dtype
 
@@ -453,6 +469,11 @@ class LLMHandler:
             )
             logger.info(f"Constrained processor initialized in {time.time() - processor_start:.2f} seconds")
             
+            # Disable CUDA/HIP graph capture on ROCm (unverified on RDNA3 Windows)
+            is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+            if is_rocm:
+                disable_cuda_graphs = True
+
             # Initialize based on user-selected backend
             if backend == "vllm":
                 # Try to initialize with vllm (LM always uses CUDA graphs for best performance)
@@ -484,8 +505,8 @@ class LLMHandler:
         capture is disabled (required when LoRA training may run in the same process)."""
         if not torch.cuda.is_available():
             self.llm_initialized = False
-            logger.error("CUDA is not available. Please check your GPU setup.")
-            return "❌ CUDA is not available. Please check your GPU setup."
+            logger.error("CUDA/ROCm is not available. Please check your GPU setup.")
+            return "❌ CUDA/ROCm is not available. Please check your GPU setup."
         try:
             from nanovllm import LLM, SamplingParams
         except ImportError:
@@ -853,6 +874,8 @@ class LLMHandler:
                     torch.manual_seed(seeds[i])
                     if torch.cuda.is_available():
                         torch.cuda.manual_seed_all(seeds[i])
+                    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                        torch.mps.manual_seed(seeds[i])
                 
                 # Generate using single-item method with batch-mode defaults
                 output_text = self._run_pt_single(
@@ -2082,13 +2105,16 @@ class LLMHandler:
                         self.llm.reset()
                 except Exception:
                     pass  # Ignore errors during cleanup
-            # Clear CUDA or XPU cache to release any corrupted memory
+            # Clear accelerator cache to release any corrupted memory
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
             elif hasattr(torch, 'xpu') and torch.xpu.is_available():
                 torch.xpu.empty_cache()
                 torch.xpu.synchronize()
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+                torch.mps.synchronize()
             return "", f"❌ Error generating from formatted prompt: {type(e).__name__}: {e or error_detail.splitlines()[-1]}"
     
     def _generate_with_constrained_decoding(
@@ -2251,7 +2277,8 @@ class LLMHandler:
                 uncond_logits = next_token_logits[uncond_start_idx:uncond_start_idx+batch_size]
                 
                 # Apply CFG formula: cfg_logits = uncond_logits + cfg_scale * (cond_logits - uncond_logits)
-                cfg_logits = uncond_logits + cfg_scale * (cond_logits - uncond_logits)
+                # Upcast to float32 to prevent overflow in float16 (CFG scaling can exceed fp16 range)
+                cfg_logits = uncond_logits.float() + cfg_scale * (cond_logits.float() - uncond_logits.float())
                 
                 # Apply constrained processor FIRST (modifies logits based on FSM state)
                 if constrained_processor is not None:
