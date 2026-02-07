@@ -2607,8 +2607,11 @@ class LLMHandler:
         pad_token_id = self.llm_tokenizer.pad_token_id or eos_token_id
 
         use_cfg = cfg_scale > 1.0
+        cfg_label = "CFG " if use_cfg else ""
+        tqdm_desc = f"MLX {cfg_label}Generation"
 
         # ---- Prefill phase ----
+        prefill_start = time.time()
         if use_cfg:
             # Build unconditional prompt
             uncond_text = self._build_unconditional_prompt(
@@ -2626,6 +2629,7 @@ class LLMHandler:
                 truncation=True,
             )
             uncond_prompt = mx.array(uncond_inputs["input_ids"])
+            uncond_length = uncond_prompt.shape[1]
 
             # Create separate caches for conditional and unconditional
             cond_cache = self._make_mlx_cache()
@@ -2638,17 +2642,35 @@ class LLMHandler:
 
             last_cond = cond_logits[:, -1:, :]
             last_uncond = uncond_logits[:, -1:, :]
+
+            prefill_time = time.time() - prefill_start
+            total_prefill_tokens = prompt_length + uncond_length
+            prefill_tps = total_prefill_tokens / prefill_time if prefill_time > 0 else 0
+            logger.info(
+                f"MLX prefill: {total_prefill_tokens} tokens "
+                f"(cond={prompt_length}, uncond={uncond_length}) "
+                f"in {prefill_time:.2f}s ({prefill_tps:.1f} tok/s)"
+            )
         else:
             cache = self._make_mlx_cache()
             logits_out = self._mlx_model(prompt, cache=cache)
             mx.eval(logits_out)
             last_logits = logits_out[:, -1:, :]
 
+            prefill_time = time.time() - prefill_start
+            prefill_tps = prompt_length / prefill_time if prefill_time > 0 else 0
+            logger.info(
+                f"MLX prefill: {prompt_length} tokens "
+                f"in {prefill_time:.2f}s ({prefill_tps:.1f} tok/s)"
+            )
+
         # ---- Autoregressive generation loop ----
         # Track all token IDs for constrained processor context
         all_token_ids = list(input_ids_np[0])
         new_tokens = []
+        decode_start = time.time()
 
+        pbar = tqdm(total=max_new_tokens, desc=tqdm_desc, unit="tok")
         for step in range(max_new_tokens):
             # Apply CFG formula in MLX
             if use_cfg:
@@ -2686,6 +2708,7 @@ class LLMHandler:
 
             new_tokens.append(token_id)
             all_token_ids.append(token_id)
+            pbar.update(1)
 
             # Update constrained processor state
             if constrained_processor is not None:
@@ -2709,6 +2732,18 @@ class LLMHandler:
                 logits_out = self._mlx_model(next_input, cache=cache)
                 mx.eval(logits_out)
                 last_logits = logits_out[:, -1:, :]
+
+        pbar.close()
+
+        # Log generation summary
+        decode_time = time.time() - decode_start
+        num_generated = len(new_tokens)
+        decode_tps = num_generated / decode_time if decode_time > 0 else 0
+        total_time = prefill_time + decode_time
+        logger.info(
+            f"MLX generation complete: {num_generated} tokens in {decode_time:.2f}s "
+            f"({decode_tps:.1f} tok/s) | prefill {prefill_time:.2f}s + decode {decode_time:.2f}s = {total_time:.2f}s total"
+        )
 
         # Decode new tokens only
         output_text = self.llm_tokenizer.decode(new_tokens, skip_special_tokens=False)
