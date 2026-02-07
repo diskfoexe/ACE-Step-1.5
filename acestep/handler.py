@@ -397,11 +397,14 @@ class AceStepHandler:
 
                 try:
                     logger.info(f"[initialize_service] Attempting to load model with attention implementation: {attn_implementation}")
+                    # When using device_map="auto", don't specify device/dtype - let Accelerate handle it
                     self.model = AutoModel.from_pretrained(
                         acestep_v15_checkpoint_path, 
                         trust_remote_code=True, 
                         attn_implementation=attn_implementation,
-                        dtype="bfloat16"
+                        torch_dtype=torch.bfloat16,  # Use torch_dtype instead of dtype
+                        device_map="auto",
+                        max_memory={0: "4GiB", "cpu": "32GiB"},
                     )
                 except Exception as e:
                     logger.warning(f"[initialize_service] Failed to load model with {attn_implementation}: {e}")
@@ -419,16 +422,16 @@ class AceStepHandler:
                 self.model.config._attn_implementation = attn_implementation
                 self.config = self.model.config
                 # Move model to device and set dtype
-                if not self.offload_to_cpu:
-                    self.model = self.model.to(device).to(self.dtype)
-                else:
-                    # If offload_to_cpu is True, check if we should keep DiT on GPU
-                    if not self.offload_dit_to_cpu:
-                        logger.info(f"[initialize_service] Keeping main model on {device} (persistent)")
-                        self.model = self.model.to(device).to(self.dtype)
-                    else:
-                        self.model = self.model.to("cpu").to(self.dtype)
-                self.model.eval()
+                #if not self.offload_to_cpu:
+                #    self.model = self.model.to(device).to(self.dtype)
+                #else:
+                #    # If offload_to_cpu is True, check if we should keep DiT on GPU
+                #    if not self.offload_dit_to_cpu:
+                #        logger.info(f"[initialize_service] Keeping main model on {device} (persistent)")
+                #        self.model = self.model.to(device).to(self.dtype)
+                #    else:
+                #        self.model = self.model.to("cpu").to(self.dtype)
+                #self.model.eval()
                 
                 if compile_model:
                     # Add __len__ method to model to support torch.compile
@@ -770,16 +773,27 @@ class AceStepHandler:
             quantizer = self.model.tokenizer.quantizer
             detokenizer = self.model.detokenizer
             
+            # Get the model's first device (important for device_map="auto")
+            model_device = next(self.model.parameters()).device
+            
             num_quantizers = getattr(quantizer, "num_quantizers", 1)
             # Create indices tensor: [T_5Hz]
             # Note: code_ids are already clamped to [0, 63999] by _parse_audio_code_string()
-            indices = torch.tensor(code_ids, device=self.device, dtype=torch.long)  # [T_5Hz]
+            # Use model's device instead of self.device for device_map="auto" compatibility
+            indices = torch.tensor(code_ids, device=model_device, dtype=torch.long)  # [T_5Hz]
             
             indices = indices.unsqueeze(0).unsqueeze(-1)  # [1, T_5Hz, 1]
             
             # Get quantized representation from indices
             # The quantizer expects [batch, T_5Hz] format and handles quantizer dimension internally
-            quantized = quantizer.get_output_from_indices(indices)
+            # When using device_map="auto" with bfloat16, we need to use autocast to ensure
+            # the quantizer's internal operations use bfloat16, otherwise intermediate tensors
+            # will be float32 and clash with bfloat16 Linear layer weights
+            device_type = "cuda" if model_device.type == "cuda" else "cpu"
+            with torch.autocast(device_type=device_type, dtype=self.dtype):
+                quantized = quantizer.get_output_from_indices(indices)
+            
+            # Ensure output is in model's dtype
             if quantized.dtype != self.dtype:
                 quantized = quantized.to(self.dtype)
             
