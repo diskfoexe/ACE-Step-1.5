@@ -88,6 +88,40 @@ If you do not have a CUDA GPU, consider:
 - Using cloud GPU providers
 - Running inference-only workflows
 - Using DiT-only mode with `ACESTEP_INIT_LLM=false`
+### AMD / ROCm GPUs
+
+ACE-Step works with AMD GPUs via PyTorch ROCm builds.
+
+**Important:** The `uv run acestep` workflow currently installs CUDA PyTorch wheels and may overwrite an existing ROCm setup. `uv run acestep` is optimized for CUDA environments and may override ROCm PyTorch installations.
+
+#### Recommended workflow for AMD / ROCm users
+
+1. Create and activate a virtual environment manually:
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+
+2. Install a ROCm-compatible PyTorch build:
+
+   ```bash
+   pip install torch --index-url https://download.pytorch.org/whl/rocm6.0
+   ```
+
+3. Install ACE-Step dependencies without using uv run:
+
+   ```bash
+   pip install -e .
+   ```
+
+4. Start the service directly:
+
+   ```bash
+   python -m acestep.acestep_v15_pipeline --port 7680
+   ```
+
+This avoids CUDA wheel replacement and has been confirmed to work on ROCm systems. On Windows, use `.venv\Scripts\activate` and the same steps.
 
 ### 🪟 Windows Portable Package (Recommended for Windows)
 
@@ -238,6 +272,8 @@ If you have `PortableGit/` folder in your package, you can:
 ---
 
 ### Standard Installation (All Platforms)
+
+> **AMD / ROCm users:** `uv run acestep` is optimized for CUDA and may override ROCm PyTorch. Use the [AMD / ROCm workflow](#amd--rocm-gpus) above instead.
 
 ### 1. Install uv (Package Manager)
 
@@ -615,10 +651,15 @@ We provide multiple ways to use ACE-Step:
 | Method | Description | Documentation |
 |--------|-------------|---------------|
 | 🖥️ **Gradio Web UI** | Interactive web interface for music generation | [Gradio Guide](./docs/en/GRADIO_GUIDE.md) |
+| 🎚️ **Studio UI (Experimental)** | Optional HTML frontend for REST API (DAW-like) | [Studio UI](./docs/en/studio.md) |
 | 🐍 **Python API** | Programmatic access for integration | [Inference API](./docs/en/INFERENCE.md) |
 | 🌐 **REST API** | HTTP-based async API for services | [REST API](./docs/en/API.md) |
 
 **📚 Documentation available in:** [English](./docs/en/) | [中文](./docs/zh/) | [日本語](./docs/ja/)
+
+### Experimental Studio UI
+
+An optional, frontend-only HTML Studio UI is available for users who prefer a more structured interface. It uses the same REST API and does not change backend behavior. Start the API server, then open `ui/studio.html` in a browser and point it at your API URL. See [Studio UI](./docs/en/studio.md).
 
 ## 📖 Tutorial
 
