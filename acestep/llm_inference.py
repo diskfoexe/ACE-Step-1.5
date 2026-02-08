@@ -435,9 +435,6 @@ class LLMHandler:
 
             self.device = device
             self.offload_to_cpu = offload_to_cpu
-            if backend == "vllm" and device != "cuda":
-                logger.warning(f"[initialize] vllm backend requires CUDA. Falling back to PyTorch backend for device={device}.")
-                backend = "pt"
 
             # Set dtype based on device: bfloat16 for cuda/xpu, float32 for mps/cpu
             # Note: LLM stays in float32 on MPS because autoregressive generation is
@@ -523,6 +520,12 @@ class LLMHandler:
                         return status_msg, False
                     status_msg = f"✅ 5Hz LM initialized (PyTorch fallback, MLX not available)\nModel: {full_lm_model_path}\nBackend: PyTorch"
                     return status_msg, True
+
+            if backend == "vllm" and device != "cuda":
+                logger.warning(
+                    f"[initialize] vllm backend requires CUDA. Falling back to PyTorch backend for device={device}."
+                )
+                backend = "pt"
 
             # Initialize based on user-selected backend
             if backend == "vllm":
