@@ -1289,7 +1289,7 @@ def create_app() -> FastAPI:
                             backend=backend,
                             device=lm_device,
                             offload_to_cpu=lm_offload,
-                            dtype=h.dtype,
+                            dtype=None,
                         )
                         if not ok:
                             app.state._llm_init_error = status
@@ -2096,7 +2096,7 @@ def create_app() -> FastAPI:
                 backend=lm_backend,
                 device=lm_device,
                 offload_to_cpu=lm_offload,
-                dtype=handler.dtype,
+                dtype=None,
             )
             if llm_ok:
                 app.state._llm_initialized = True
@@ -2585,7 +2585,7 @@ def create_app() -> FastAPI:
                     backend=backend,
                     device=lm_device,
                     offload_to_cpu=lm_offload,
-                    dtype=h.dtype,
+                    dtype=None,
                 )
                 if not ok:
                     app.state._llm_init_error = status

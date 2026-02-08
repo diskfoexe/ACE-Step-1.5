@@ -146,7 +146,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                     info=t("service.init_llm_info"),
                 )
                 # Auto-detect flash attention availability
-                flash_attn_available = dit_handler.is_flash_attention_available()
+                flash_attn_available = dit_handler.is_flash_attention_available(device_value)
                 # Set use_flash_attention value from init_params if pre-initialized
                 use_flash_attention_value = init_params.get('use_flash_attention', flash_attn_available) if service_pre_initialized else flash_attn_available
                 use_flash_attention_checkbox = gr.Checkbox(

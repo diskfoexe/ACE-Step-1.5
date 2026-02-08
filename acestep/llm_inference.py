@@ -451,6 +451,12 @@ class LLMHandler:
                     self.dtype = torch.float32
             else:
                 self.dtype = dtype
+                # Keep LM in float32 on MPS for stability.
+                if device == "mps" and self.dtype != torch.float32:
+                    logger.warning(
+                        f"[initialize] Overriding requested dtype {self.dtype} to float32 for LM on MPS."
+                    )
+                    self.dtype = torch.float32
 
             # If lm_model_path is None, use default
             if lm_model_path is None:
@@ -488,8 +494,7 @@ class LLMHandler:
             
             # Disable CUDA/HIP graph capture on ROCm (unverified on RDNA3 Windows)
             is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
-            if is_rocm:
-                disable_cuda_graphs = True
+            enforce_eager_for_vllm = bool(is_rocm)
 
             # Auto-detect best backend on Apple Silicon
             if backend == "mlx" or (backend == "vllm" and device == "mps"):
@@ -522,7 +527,10 @@ class LLMHandler:
             # Initialize based on user-selected backend
             if backend == "vllm":
                 _warn_if_prerelease_python()
-                status_msg = self._initialize_5hz_lm_vllm(full_lm_model_path, enforce_eager=False)
+                status_msg = self._initialize_5hz_lm_vllm(
+                    full_lm_model_path,
+                    enforce_eager=enforce_eager_for_vllm,
+                )
                 logger.info(f"5Hz LM status message: {status_msg}")
                 # Check if initialization failed (status_msg starts with ❌)
                 if status_msg.startswith("❌"):

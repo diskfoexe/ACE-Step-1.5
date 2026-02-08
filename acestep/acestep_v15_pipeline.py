@@ -233,7 +233,7 @@ def main():
             # Determine flash attention setting
             use_flash_attention = args.use_flash_attention
             if use_flash_attention is None:
-                use_flash_attention = dit_handler.is_flash_attention_available()
+                use_flash_attention = dit_handler.is_flash_attention_available(args.device)
 
             # Determine download source preference
             prefer_source = None
@@ -287,7 +287,7 @@ def main():
                         backend=args.backend,
                         device=args.device,
                         offload_to_cpu=args.offload_to_cpu,
-                        dtype=dit_handler.dtype,
+                        dtype=None,
                     )
                     
                     if lm_success:

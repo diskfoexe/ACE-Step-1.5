@@ -134,8 +134,16 @@ class AceStepHandler:
         models.sort()
         return models
     
-    def is_flash_attention_available(self) -> bool:
-        """Check if flash attention is available on the system"""
+    def is_flash_attention_available(self, device: Optional[str] = None) -> bool:
+        """Check whether flash attention can be used on the target device."""
+        target_device = str(device or self.device or "auto").split(":", 1)[0]
+        if target_device == "auto":
+            if not torch.cuda.is_available():
+                return False
+        elif target_device != "cuda":
+            return False
+        if not torch.cuda.is_available():
+            return False
         try:
             import flash_attn
             return True
@@ -458,33 +466,44 @@ class AceStepHandler:
             # config_path is relative path (e.g., "acestep-v15-turbo"), concatenate to checkpoints directory
             acestep_v15_checkpoint_path = os.path.join(checkpoint_dir, config_path)
             if os.path.exists(acestep_v15_checkpoint_path):
-                # Determine attention implementation
-                if use_flash_attention and self.is_flash_attention_available():
+                # Determine attention implementation, then fall back safely.
+                if use_flash_attention and self.is_flash_attention_available(device):
                     attn_implementation = "flash_attention_2"
-                    self.dtype = torch.bfloat16
                 else:
+                    if use_flash_attention:
+                        logger.warning(
+                            f"[initialize_service] Flash attention requested but unavailable for device={device}. "
+                            "Falling back to SDPA."
+                        )
                     attn_implementation = "sdpa"
 
-                try:
-                    logger.info(f"[initialize_service] Attempting to load model with attention implementation: {attn_implementation}")
-                    self.model = AutoModel.from_pretrained(
-                        acestep_v15_checkpoint_path,
-                        trust_remote_code=True,
-                        attn_implementation=attn_implementation,
-                        dtype=self.dtype,
-                    )
-                except Exception as e:
-                    logger.warning(f"[initialize_service] Failed to load model with {attn_implementation}: {e}")
-                    if attn_implementation == "sdpa":
-                        logger.info("[initialize_service] Falling back to eager attention")
-                        attn_implementation = "eager"
+                attn_candidates = [attn_implementation]
+                if "sdpa" not in attn_candidates:
+                    attn_candidates.append("sdpa")
+                if "eager" not in attn_candidates:
+                    attn_candidates.append("eager")
+
+                last_attn_error = None
+                self.model = None
+                for candidate in attn_candidates:
+                    try:
+                        logger.info(f"[initialize_service] Attempting to load model with attention implementation: {candidate}")
                         self.model = AutoModel.from_pretrained(
-                            acestep_v15_checkpoint_path, 
-                            trust_remote_code=True, 
-                            attn_implementation=attn_implementation
+                            acestep_v15_checkpoint_path,
+                            trust_remote_code=True,
+                            attn_implementation=candidate,
+                            dtype=self.dtype,
                         )
-                    else:
-                        raise e
+                        attn_implementation = candidate
+                        break
+                    except Exception as e:
+                        last_attn_error = e
+                        logger.warning(f"[initialize_service] Failed to load model with {candidate}: {e}")
+
+                if self.model is None:
+                    raise RuntimeError(
+                        f"Failed to load model with attention implementations {attn_candidates}: {last_attn_error}"
+                    ) from last_attn_error
 
                 self.model.config._attn_implementation = attn_implementation
                 self.config = self.model.config
@@ -1412,11 +1431,8 @@ class AceStepHandler:
         if target_device == "mps":
             return torch.float16
         if target_device == "cpu":
-            # On low-VRAM tiers (<=8GB), avoid CPU bfloat16 VAE path.
-            # This path is often extremely slow and can destabilize preprocessing.
-            gpu_config = get_global_gpu_config()
-            if gpu_config.tier in {"tier1", "tier2", "tier3"}:
-                return torch.float32
+            # CPU float16/bfloat16 VAE paths are typically much slower and less stable.
+            return torch.float32
         return self.dtype
     
     def _format_instruction(self, instruction: str) -> str:
