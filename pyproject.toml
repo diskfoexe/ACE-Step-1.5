@@ -3,7 +3,7 @@ name = "ace-step"
 version = "1.5.0"
 description = "ACE-Step 1.5"
 readme = "README.md"
-requires-python = "==3.11.*"
+requires-python = "==3.12.*"
 license = {text = "MIT"}
 dependencies = [
     # PyTorch for Windows with CUDA 12.8
@@ -14,6 +14,13 @@ dependencies = [
     "torch==2.10.0+cu128; sys_platform == 'linux'",
     "torchvision==0.25.0+cu128; sys_platform == 'linux'",
     "torchaudio==2.10.0+cu128; sys_platform == 'linux'",
+    ## PyTorch for Linux with ROCm 7.2
+    ## [!] Note the versions of torch and torchaudio differ. These are
+    ## the recommended versions from AMD's website.
+    # "torch==2.9.1; sys_platform == 'linux'",
+    # "torchvision; sys_platform == 'linux'",
+    # "torchaudio==2.9.0; sys_platform == 'linux'",
+    # "triton",
     # PyTorch for macOS (CPU / MPS)
     "torch>=2.9.1; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "torchvision; sys_platform == 'darwin' and platform_machine == 'arm64'",
@@ -62,6 +69,7 @@ required-environments = [
 
 [tool.uv.sources]
 nano-vllm = { path = "acestep/third_parts/nano-vllm" }
+## CUDA 12.8 wheels
 torch = [
     { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
 ]
@@ -71,6 +79,20 @@ torchvision = [
 torchaudio = [
     { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
 ]
+## ROCm 7.2 wheels, from AMD:
+## https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/native_linux/install-pytorch.html
+# torch = [
+#   { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torch-2.9.1%2Brocm7.2.0.lw.git7e1940d4-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux'" },
+# ]
+# torchvision = [
+#   { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torchvision-0.24.0%2Brocm7.2.0.gitb919bd0c-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux'" },
+# ]
+# torchaudio = [
+#   { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torchaudio-2.9.0%2Brocm7.2.0.gite3c6ee2b-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux'" },
+# ]
+# triton = [
+#   { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/triton-3.5.1%2Brocm7.2.0.gita272dfa8-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux'" },
+# ]
 
 [project.scripts]
 acestep = "acestep.acestep_v15_pipeline:main"

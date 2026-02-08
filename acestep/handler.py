@@ -436,7 +436,13 @@ class AceStepHandler:
                     import torchao
                 except ImportError:
                     raise ImportError("torchao is required for quantization but is not installed. Please install torchao to use quantization features.")
-                
+            
+            # On ROCm, disable MIOpen (mapped via the cudnn backend flag) to avoid
+            # a bug where PyTorch passes null workspace pointers to MIOpen solvers,
+            # causing fallback to extremely slow convolution algorithms.
+            # With MIOpen disabled, PyTorch uses its native conv path (im2col + rocBLAS).
+            if device == "cuda" and hasattr(torch.version, 'hip') and torch.version.hip is not None:
+                torch.backends.cudnn.enabled = False
 
             # Auto-detect project root (independent of passed project_root parameter)
             actual_project_root = self._get_project_root()
