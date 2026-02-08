@@ -56,7 +56,9 @@ def _select_compute_dtype(device_type: str) -> torch.dtype:
     if device_type in ("cuda", "xpu"):
         return torch.bfloat16
     if device_type == "mps":
-        return torch.float16
+        # MPS + Fabric AMP may raise "Attempting to unscale FP16 gradients".
+        # Use fp32 training path for stability on Apple Silicon.
+        return torch.float32
     return torch.float32
 
 
@@ -65,7 +67,7 @@ def _select_fabric_precision(device_type: str) -> str:
     if device_type in ("cuda", "xpu"):
         return "bf16-mixed"
     if device_type == "mps":
-        return "16-mixed"
+        return "32-true"
     return "32-true"
 
 

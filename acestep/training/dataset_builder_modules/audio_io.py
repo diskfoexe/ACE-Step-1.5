@@ -1,8 +1,15 @@
 import os
+import shutil
+import subprocess
 from typing import Tuple
 
-import torchaudio
+import soundfile as sf
 from loguru import logger
+
+try:
+    import torchaudio
+except Exception:
+    torchaudio = None
 
 
 def load_lyrics_file(audio_path: str) -> Tuple[str, bool]:
@@ -30,6 +37,39 @@ def load_lyrics_file(audio_path: str) -> Tuple[str, bool]:
 def get_audio_duration(audio_path: str) -> int:
     """Get the duration of an audio file in seconds."""
     try:
+        info = sf.info(audio_path)
+        if info.samplerate > 0:
+            return int(info.frames / info.samplerate)
+    except Exception:
+        pass
+
+    ffprobe_bin = shutil.which("ffprobe")
+    if ffprobe_bin:
+        try:
+            proc = subprocess.run(
+                [
+                    ffprobe_bin,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    audio_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                return int(float(proc.stdout.strip()))
+        except Exception:
+            pass
+
+    try:
+        if torchaudio is None:
+            raise RuntimeError("torchaudio unavailable")
         info = torchaudio.info(audio_path)
         return int(info.num_frames / info.sample_rate)
     except Exception as e:

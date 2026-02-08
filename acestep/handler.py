@@ -11,6 +11,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import math
 from copy import deepcopy
 import tempfile
+import shutil
+import subprocess
 import traceback
 import re
 import random
@@ -934,6 +936,67 @@ class AceStepHandler:
         except Exception as e:
             logger.exception("[process_target_audio] Error processing target audio")
             return None
+
+    def _load_audio_file(self, audio_file) -> Tuple[torch.Tensor, int]:
+        """
+        Load audio file with robust backend fallback.
+
+        Priority:
+        1) soundfile (avoids torchaudio/torchcodec runtime coupling)
+        2) ffmpeg -> temporary wav -> soundfile (for formats libsndfile can't decode)
+        3) torchaudio.load (last resort)
+        """
+        # Resolve file path from possible file-like object
+        if hasattr(audio_file, "name") and isinstance(audio_file.name, str):
+            audio_path = audio_file.name
+        else:
+            audio_path = str(audio_file)
+
+        # Try soundfile first
+        try:
+            audio_np, sr = sf.read(audio_path, dtype="float32")
+            if audio_np.ndim == 1:
+                audio = torch.from_numpy(audio_np).unsqueeze(0)  # [1, samples]
+            else:
+                audio = torch.from_numpy(audio_np.T)  # [channels, samples]
+            return audio, int(sr)
+        except Exception as sf_err:
+            logger.warning(f"[_load_audio_file] soundfile load failed: {sf_err}")
+
+        # Fallback 2: decode with ffmpeg and read back via soundfile.
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin is not None:
+            try:
+                with tempfile.TemporaryDirectory(prefix="acestep_load_audio_") as tmpdir:
+                    tmp_wav = os.path.join(tmpdir, "decoded.wav")
+                    cmd = [
+                        ffmpeg_bin,
+                        "-y",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-i",
+                        audio_path,
+                        "-f",
+                        "wav",
+                        tmp_wav,
+                    ]
+                    proc = subprocess.run(cmd, capture_output=True, text=True)
+                    if proc.returncode != 0:
+                        raise RuntimeError((proc.stderr or "").strip() or f"ffmpeg exited with code {proc.returncode}")
+
+                    audio_np, sr = sf.read(tmp_wav, dtype="float32")
+                    if audio_np.ndim == 1:
+                        audio = torch.from_numpy(audio_np).unsqueeze(0)  # [1, samples]
+                    else:
+                        audio = torch.from_numpy(audio_np.T)  # [channels, samples]
+                    return audio, int(sr)
+            except Exception as ffmpeg_err:
+                logger.warning(f"[_load_audio_file] ffmpeg decode fallback failed: {ffmpeg_err}")
+
+        # Fallback 3: torchaudio (may require torchcodec runtime support)
+        audio, sr = torchaudio.load(audio_path)
+        return audio, int(sr)
     
     def _parse_audio_code_string(self, code_str: str) -> List[int]:
         """Extract integer audio codes from prompt tokens like <|audio_code_123|>.
@@ -1689,7 +1752,7 @@ class AceStepHandler:
             
         try:
             # Load audio file
-            audio, sr = torchaudio.load(audio_file)
+            audio, sr = self._load_audio_file(audio_file)
             
             logger.debug(f"[process_reference_audio] Reference audio shape: {audio.shape}")
             logger.debug(f"[process_reference_audio] Reference audio sample rate: {sr}")
@@ -1744,7 +1807,7 @@ class AceStepHandler:
             
         try:
             # Load audio file
-            audio, sr = torchaudio.load(audio_file)
+            audio, sr = self._load_audio_file(audio_file)
             
             # Normalize to stereo 48kHz
             audio = self._normalize_audio_to_stereo_48k(audio, sr)
