@@ -578,7 +578,10 @@ def generate_with_progress(
         seed_list = [int(seed)] if seed >= 0 else None
     elif isinstance(seed, str) and seed.strip():
         if "," in seed:
-            seed_list = [int(s.strip()) for s in seed.split(",")]
+            try:
+                seed_list = [int(s.strip()) for s in seed.split(",")]
+            except (ValueError, TypeError):
+                seed_list = None
         else:
             try:
                 seed_list = [int(seed.strip())]
