@@ -35,7 +35,7 @@ try:
     from .handler import AceStepHandler
     from .llm_inference import LLMHandler
     from .dataset_handler import DatasetHandler
-    from .gradio_ui import create_gradio_interface
+    # from .gradio_ui import create_gradio_interface
     from .gpu_config import get_gpu_config, get_gpu_memory_gb, print_gpu_config_info, set_global_gpu_config, VRAM_16GB_MIN_GB
 except ImportError:
     # When executed as a script: `python acestep/acestep_v15_pipeline.py`
@@ -45,41 +45,11 @@ except ImportError:
     from acestep.handler import AceStepHandler
     from acestep.llm_inference import LLMHandler
     from acestep.dataset_handler import DatasetHandler
-    from acestep.gradio_ui import create_gradio_interface
+    # from acestep.gradio_ui import create_gradio_interface
     from acestep.gpu_config import get_gpu_config, get_gpu_memory_gb, print_gpu_config_info, set_global_gpu_config, VRAM_16GB_MIN_GB
 
 
-def create_demo(init_params=None, language='en'):
-    """
-    Create Gradio demo interface
-    
-    Args:
-        init_params: Dictionary containing initialization parameters and state.
-                    If None, service will not be pre-initialized.
-                    Keys: 'pre_initialized' (bool), 'checkpoint', 'config_path', 'device',
-                          'init_llm', 'lm_model_path', 'backend', 'use_flash_attention',
-                          'offload_to_cpu', 'offload_dit_to_cpu', 'init_status',
-                          'dit_handler', 'llm_handler' (initialized handlers if pre-initialized),
-                          'language' (UI language code)
-        language: UI language code ('en', 'zh', 'ja', default: 'en')
-    
-    Returns:
-        Gradio Blocks instance
-    """
-    # Use pre-initialized handlers if available, otherwise create new ones
-    if init_params and init_params.get('pre_initialized') and 'dit_handler' in init_params:
-        dit_handler = init_params['dit_handler']
-        llm_handler = init_params['llm_handler']
-    else:
-        dit_handler = AceStepHandler()  # DiT handler
-        llm_handler = LLMHandler()      # LM handler
-    
-    dataset_handler = DatasetHandler()  # Dataset handler
-    
-    # Create Gradio interface with all handlers and initialization parameters
-    demo = create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_params=init_params, language=language)
-    
-    return demo
+# create_demo function removed as it depended on Gradio
 
 
 def main():
@@ -321,87 +291,32 @@ def main():
             
             print("Service initialization completed successfully!")
         
-        # Create and launch demo
-        print(f"Creating Gradio interface with language: {args.language}...")
+        # Launch API Server directly
+        import uvicorn
         
-        # If not using init_service, still pass gpu_config to init_params
-        if init_params is None:
-            init_params = {
-                'gpu_config': gpu_config,
-                'language': args.language,
-                'output_dir': output_dir,  # Pass output dir to UI
-            }
+        print(f"Launching ACE-Step API Server on {args.server_name}:{args.port}...")
         
-        demo = create_demo(init_params=init_params, language=args.language)
-        
-        # Enable queue for multi-user support
-        # This ensures proper request queuing and prevents concurrent generation conflicts
-        print("Enabling queue for multi-user support...")
-        demo.queue(
-            max_size=20,  # Maximum queue size (adjust based on your needs)
-            status_update_rate="auto",  # Update rate for queue status
-            default_concurrency_limit=1,  # Prevents VRAM saturation
+        # Set environment variables for API server to pick up
+        if args.config_path: os.environ["ACESTEP_CONFIG_PATH"] = args.config_path
+        if args.lm_model_path: os.environ["ACESTEP_LM_MODEL_PATH"] = args.lm_model_path
+        if args.backend: os.environ["ACESTEP_LM_BACKEND"] = args.backend
+        if args.device: os.environ["ACESTEP_DEVICE"] = args.device
+        if args.offload_to_cpu: os.environ["ACESTEP_OFFLOAD_TO_CPU"] = "true"
+        if args.init_llm: os.environ["ACESTEP_INIT_LLM"] = "true"
+        if args.download_source: os.environ["ACESTEP_DOWNLOAD_SOURCE"] = args.download_source
+        if args.api_key: os.environ["ACESTEP_API_KEY"] = args.api_key
+
+        # Run uvicorn
+        uvicorn.run(
+            "acestep.api_server:app",
+            host=args.server_name,
+            port=args.port,
+            log_level="info" if not args.debug else "debug",
+            workers=1
         )
 
-        print(f"Launching server on {args.server_name}:{args.port}...")
-
-        # Setup authentication if provided
-        auth = None
-        if args.auth_username and args.auth_password:
-            auth = (args.auth_username, args.auth_password)
-            print("Authentication enabled")
-
-        allowed_paths = [output_dir]
-        for p in args.allowed_path:
-            if p and p not in allowed_paths:
-                allowed_paths.append(p)
-
-        # Enable API endpoints if requested
-        if args.enable_api:
-            print("Enabling API endpoints...")
-            from acestep.gradio_ui.api_routes import setup_api_routes
-
-            # Launch Gradio first with prevent_thread_lock=True
-            demo.launch(
-                server_name=args.server_name,
-                server_port=args.port,
-                share=args.share,
-                debug=args.debug,
-                show_error=True,
-                prevent_thread_lock=True,  # Don't block, so we can add routes
-                inbrowser=False,
-                auth=auth,
-                allowed_paths=allowed_paths,  # include output_dir + user-provided
-            )
-
-            # Now add API routes to Gradio's FastAPI app (app is available after launch)
-            setup_api_routes(demo, dit_handler, llm_handler, api_key=args.api_key)
-
-            if args.api_key:
-                print("API authentication enabled")
-            print("API endpoints enabled: /health, /v1/models, /release_task, /query_result, /create_random_sample, /format_lyrics")
-
-            # Keep the main thread alive
-            try:
-                while True:
-                    import time
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                print("\nShutting down...")
-        else:
-            demo.launch(
-                server_name=args.server_name,
-                server_port=args.port,
-                share=args.share,
-                debug=args.debug,
-                show_error=True,
-                prevent_thread_lock=False,
-                inbrowser=False,
-                auth=auth,
-                allowed_paths=allowed_paths,  # include output_dir + user-provided
-            )
     except Exception as e:
-        print(f"Error launching Gradio: {e}", file=sys.stderr)
+        print(f"Error launching server: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
         sys.exit(1)

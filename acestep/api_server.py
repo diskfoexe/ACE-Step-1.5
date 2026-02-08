@@ -41,6 +41,8 @@ except ImportError:  # Optional dependency
     load_dotenv = None  # type: ignore
 
 from fastapi import FastAPI, HTTPException, Request, Depends, Header
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -58,7 +60,6 @@ from acestep.inference import (
     create_sample,
     format_sample,
 )
-from acestep.gradio_ui.events.results_handlers import _build_generation_info
 from acestep.gpu_config import (
     get_gpu_config,
     get_gpu_memory_gb,
@@ -2148,6 +2149,33 @@ def create_app() -> FastAPI:
     from acestep.openrouter_adapter import create_openrouter_router
     openrouter_router = create_openrouter_router(lambda: app.state)
     app.include_router(openrouter_router)
+
+    from acestep.api_training_routes import router as training_router
+    app.include_router(training_router)
+
+    # Mount frontend/dist
+    frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist")
+    if os.path.exists(frontend_path):
+        print(f"[API Server] Mounting frontend from {frontend_path}")
+        # Mount assets folder
+        assets_path = os.path.join(frontend_path, "assets")
+        if os.path.exists(assets_path):
+            app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+        
+        @app.get("/")
+        async def serve_index():
+            return FileResponse(os.path.join(frontend_path, "index.html"))
+
+        @app.exception_handler(404)
+        async def not_found_handler(request: Request, exc: HTTPException):
+            # Pass through API 404s
+            api_prefixes = ["/v1", "/api", "/release_task", "/query_result", "/create_random_sample", "/format_input", "/health", "/docs", "/openapi.json"]
+            if any(request.url.path.startswith(prefix) for prefix in api_prefixes):
+                raise exc
+            # For everything else, serve index.html (SPA)
+            return FileResponse(os.path.join(frontend_path, "index.html"))
+    else:
+        print(f"[API Server] Frontend dist not found at {frontend_path}")
 
     async def _queue_position(job_id: str) -> int:
         async with app.state.pending_lock:

@@ -44,7 +44,7 @@ REM Auto-initialize models on startup
 set INIT_SERVICE=--init_service true
 
 REM API settings (enable REST API alongside Gradio)
-REM set ENABLE_API=--enable-api
+set ENABLE_API=--enable-api
 REM set API_KEY=--api-key sk-your-secret-key
 
 REM Authentication settings
