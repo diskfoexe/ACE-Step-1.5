@@ -1,8 +1,8 @@
 # ACE-Step 1.5 CLI Guide
 
-This guide explains how to use `cli.py`, the interactive wizard and config-driven CLI for ACE-Step 1.5 inference.
+This guide explains how to use `cli.py`, the interactive wizard and config-driven CLI for ACE-Step inference.
 
-The CLI is **wizard/config only**: you either run the wizard to build a config, or load a `.toml` config and generate. There are no direct task flags besides `--config`, `--configure`, and `--log-level`.
+The CLI is **wizard/config only**: you either run the wizard to build a config, or load a `.toml` config and generate.
 
 ---
 
@@ -17,20 +17,14 @@ python cli.py
 Generate from a saved config:
 
 ```bash
-python cli.py --config configs/my_run.toml
+python cli.py --config config.toml
 ```
 
 Create or edit a config without generating:
 
 ```bash
 python cli.py --configure
-python cli.py --configure --config configs/my_run.toml
-```
-
-Adjust log verbosity:
-
-```bash
-python cli.py --config configs/my_run.toml --log-level DEBUG
+python cli.py --configure --config config.toml
 ```
 
 ---
