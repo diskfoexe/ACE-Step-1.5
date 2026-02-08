@@ -43,7 +43,7 @@ class TrainingConfig:
     """Configuration for LoRA training process.
     
     Training uses:
-    - BFloat16 precision (only supported precision)
+    - Device-aware mixed precision (bf16 on CUDA/XPU, fp16 on MPS, fp32 on CPU)
     - Discrete timesteps from turbo shift=3.0 schedule (8 steps)
     - Randomly samples one of 8 timesteps per training step:
       [1.0, 0.9545, 0.9, 0.8333, 0.75, 0.6429, 0.5, 0.3]
@@ -59,7 +59,7 @@ class TrainingConfig:
         warmup_steps: Number of warmup steps for learning rate scheduler
         weight_decay: Weight decay for optimizer
         max_grad_norm: Maximum gradient norm for clipping
-        mixed_precision: Always "bf16" (only supported precision)
+        mixed_precision: Preferred precision mode for logging/config tracking
         seed: Random seed for reproducibility
         output_dir: Directory to save checkpoints and logs
     """
@@ -74,7 +74,7 @@ class TrainingConfig:
     warmup_steps: int = 100
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
-    mixed_precision: str = "bf16"  # Fixed: only bf16 supported
+    mixed_precision: str = "bf16"
     seed: int = 42
     output_dir: str = "./lora_output"
     

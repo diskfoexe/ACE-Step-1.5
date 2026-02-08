@@ -120,35 +120,35 @@ def collate_preprocessed_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         # Pad target_latents [T, 64] -> [max_T, 64]
         tl = sample["target_latents"]
         if tl.shape[0] < max_latent_len:
-            pad = torch.zeros(max_latent_len - tl.shape[0], tl.shape[1])
+            pad = tl.new_zeros(max_latent_len - tl.shape[0], tl.shape[1])
             tl = torch.cat([tl, pad], dim=0)
         target_latents.append(tl)
         
         # Pad attention_mask [T] -> [max_T]
         am = sample["attention_mask"]
         if am.shape[0] < max_latent_len:
-            pad = torch.zeros(max_latent_len - am.shape[0])
+            pad = am.new_zeros(max_latent_len - am.shape[0])
             am = torch.cat([am, pad], dim=0)
         attention_masks.append(am)
         
         # Pad context_latents [T, 65] -> [max_T, 65]
         cl = sample["context_latents"]
         if cl.shape[0] < max_latent_len:
-            pad = torch.zeros(max_latent_len - cl.shape[0], cl.shape[1])
+            pad = cl.new_zeros(max_latent_len - cl.shape[0], cl.shape[1])
             cl = torch.cat([cl, pad], dim=0)
         context_latents.append(cl)
         
         # Pad encoder_hidden_states [L, D] -> [max_L, D]
         ehs = sample["encoder_hidden_states"]
         if ehs.shape[0] < max_encoder_len:
-            pad = torch.zeros(max_encoder_len - ehs.shape[0], ehs.shape[1])
+            pad = ehs.new_zeros(max_encoder_len - ehs.shape[0], ehs.shape[1])
             ehs = torch.cat([ehs, pad], dim=0)
         encoder_hidden_states.append(ehs)
         
         # Pad encoder_attention_mask [L] -> [max_L]
         eam = sample["encoder_attention_mask"]
         if eam.shape[0] < max_encoder_len:
-            pad = torch.zeros(max_encoder_len - eam.shape[0])
+            pad = eam.new_zeros(max_encoder_len - eam.shape[0])
             eam = torch.cat([eam, pad], dim=0)
         encoder_attention_masks.append(eam)
     
@@ -235,7 +235,7 @@ class PreprocessedDataModule(LightningDataModule if LIGHTNING_AVAILABLE else obj
             pin_memory=self.pin_memory,
             pin_memory_device=pin_memory_device,
             collate_fn=collate_preprocessed_batch,
-            drop_last=True,
+            drop_last=False,
             prefetch_factor=prefetch_factor,
             persistent_workers=persistent_workers,
         )

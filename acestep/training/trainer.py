@@ -7,6 +7,8 @@ Supports training from preprocessed tensor files for optimal performance.
 
 import os
 import time
+import random
+import math
 from typing import Optional, List, Dict, Any, Tuple, Generator
 from loguru import logger
 
@@ -38,6 +40,33 @@ from acestep.training.data_module import PreprocessedDataModule
 
 # Turbo model shift=3.0 discrete timesteps (8 steps, same as inference)
 TURBO_SHIFT3_TIMESTEPS = [1.0, 0.9545454545454546, 0.9, 0.8333333333333334, 0.75, 0.6428571428571429, 0.5, 0.3]
+
+
+def _normalize_device_type(device: Any) -> str:
+    """Normalize torch device or string to canonical device type."""
+    if isinstance(device, torch.device):
+        return device.type
+    if isinstance(device, str):
+        return device.split(":", 1)[0]
+    return str(device)
+
+
+def _select_compute_dtype(device_type: str) -> torch.dtype:
+    """Pick the compute dtype for each accelerator."""
+    if device_type in ("cuda", "xpu"):
+        return torch.bfloat16
+    if device_type == "mps":
+        return torch.float16
+    return torch.float32
+
+
+def _select_fabric_precision(device_type: str) -> str:
+    """Pick Fabric precision plugin setting for each accelerator."""
+    if device_type in ("cuda", "xpu"):
+        return "bf16-mixed"
+    if device_type == "mps":
+        return "16-mixed"
+    return "32-true"
 
 
 def sample_discrete_timestep(bsz, timesteps_tensor):
@@ -99,8 +128,10 @@ class PreprocessedLoRAModule(nn.Module):
         self.lora_config = lora_config
         self.training_config = training_config
         self.device = torch.device(device) if isinstance(device, str) else device
-        self.dtype = dtype
-        self.timesteps_tensor = torch.tensor(TURBO_SHIFT3_TIMESTEPS, device=self.device, dtype=dtype)
+        self.device_type = _normalize_device_type(self.device)
+        self.dtype = _select_compute_dtype(self.device_type)
+        self.transfer_non_blocking = self.device_type in ("cuda", "xpu")
+        self.timesteps_tensor = torch.tensor(TURBO_SHIFT3_TIMESTEPS, device=self.device, dtype=self.dtype)
         
         # Inject LoRA into the decoder only
         if check_peft_available():
@@ -134,20 +165,27 @@ class PreprocessedLoRAModule(nn.Module):
             Loss tensor (float32 for stable backward)
         """
         # Use autocast for mixed precision training (bf16 on CUDA/XPU, fp16 on MPS)
-        _device_type = self.device if isinstance(self.device, str) else self.device.type
-        if _device_type in ("cuda", "xpu"):
-            autocast_ctx = torch.autocast(device_type=_device_type, dtype=torch.bfloat16)
-        elif _device_type == "mps":
-            autocast_ctx = torch.autocast(device_type=_device_type, dtype=torch.float16)
+        if self.device_type in ("cuda", "xpu", "mps"):
+            autocast_ctx = torch.autocast(device_type=self.device_type, dtype=self.dtype)
         else:
             autocast_ctx = nullcontext()
         with autocast_ctx:
             # Get tensors from batch (already on device from Fabric dataloader)
-            target_latents = batch["target_latents"].to(self.device, non_blocking=True)  # x0
-            attention_mask = batch["attention_mask"].to(self.device, non_blocking=True)
-            encoder_hidden_states = batch["encoder_hidden_states"].to(self.device, non_blocking=True)
-            encoder_attention_mask = batch["encoder_attention_mask"].to(self.device, non_blocking=True)
-            context_latents = batch["context_latents"].to(self.device, non_blocking=True)
+            target_latents = batch["target_latents"].to(
+                self.device, dtype=self.dtype, non_blocking=self.transfer_non_blocking
+            )  # x0
+            attention_mask = batch["attention_mask"].to(
+                self.device, dtype=self.dtype, non_blocking=self.transfer_non_blocking
+            )
+            encoder_hidden_states = batch["encoder_hidden_states"].to(
+                self.device, dtype=self.dtype, non_blocking=self.transfer_non_blocking
+            )
+            encoder_attention_mask = batch["encoder_attention_mask"].to(
+                self.device, dtype=self.dtype, non_blocking=self.transfer_non_blocking
+            )
+            context_latents = batch["context_latents"].to(
+                self.device, dtype=self.dtype, non_blocking=self.transfer_non_blocking
+            )
             
             bsz = target_latents.shape[0]
             
@@ -240,6 +278,16 @@ class LoRATrainer:
                 return
             
             # Create training module
+            torch.manual_seed(self.training_config.seed)
+            random.seed(self.training_config.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(self.training_config.seed)
+            try:
+                import numpy as np
+                np.random.seed(self.training_config.seed)
+            except Exception:
+                pass
+
             self.module = PreprocessedLoRAModule(
                 model=self.dit_handler.model,
                 lora_config=self.lora_config,
@@ -254,6 +302,9 @@ class LoRATrainer:
                 batch_size=self.training_config.batch_size,
                 num_workers=self.training_config.num_workers,
                 pin_memory=self.training_config.pin_memory,
+                prefetch_factor=self.training_config.prefetch_factor,
+                persistent_workers=self.training_config.persistent_workers,
+                pin_memory_device=self.training_config.pin_memory_device,
             )
             
             # Setup data
@@ -286,8 +337,9 @@ class LoRATrainer:
         # Create output directory
         os.makedirs(self.training_config.output_dir, exist_ok=True)
         
-        # Force BFloat16 precision (only supported precision for this model)
-        precision = "bf16-mixed"
+        device_type = self.module.device_type
+        precision = _select_fabric_precision(device_type)
+        accelerator = device_type if device_type in ("cuda", "xpu", "mps", "cpu") else "auto"
         
         # Create TensorBoard logger
         tb_logger = TensorBoardLogger(
@@ -297,14 +349,14 @@ class LoRATrainer:
         
         # Initialize Fabric
         self.fabric = Fabric(
-            accelerator="auto",
+            accelerator=accelerator,
             devices=1,
             precision=precision,
             loggers=[tb_logger],
         )
         self.fabric.launch()
         
-        yield 0, 0.0, f"🚀 Starting training (precision: {precision})..."
+        yield 0, 0.0, f"🚀 Starting training (device: {device_type}, precision: {precision})..."
         
         # Get dataloader
         train_loader = data_module.train_dataloader()
@@ -327,7 +379,8 @@ class LoRATrainer:
         optimizer = AdamW(trainable_params, **optimizer_kwargs)
         
         # Calculate total steps
-        total_steps = len(train_loader) * self.training_config.max_epochs // self.training_config.gradient_accumulation_steps
+        steps_per_epoch = max(1, math.ceil(len(train_loader) / self.training_config.gradient_accumulation_steps))
+        total_steps = steps_per_epoch * self.training_config.max_epochs
         warmup_steps = min(self.training_config.warmup_steps, max(1, total_steps // 10))
         
         # Scheduler
@@ -351,8 +404,8 @@ class LoRATrainer:
             milestones=[warmup_steps],
         )
         
-        # Convert model to bfloat16 (entire model for consistent dtype)
-        self.module.model = self.module.model.to(torch.bfloat16)
+        # Convert model to the selected compute dtype for consistent execution.
+        self.module.model = self.module.model.to(self.module.dtype)
 
         # Setup with Fabric - only the decoder (which has LoRA)
         self.module.model.decoder, optimizer = self.fabric.setup(self.module.model.decoder, optimizer)
@@ -421,12 +474,13 @@ class LoRATrainer:
         # Training loop
         accumulation_step = 0
         accumulated_loss = 0.0
+        optimizer.zero_grad(set_to_none=True)
 
         self.module.model.decoder.train()
 
         for epoch in range(start_epoch, self.training_config.max_epochs):
             epoch_loss = 0.0
-            num_batches = 0
+            num_updates = 0
             epoch_start_time = time.time()
             
             for batch_idx, batch in enumerate(train_loader):
@@ -454,7 +508,7 @@ class LoRATrainer:
                     
                     optimizer.step()
                     scheduler.step()
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                     
                     global_step += 1
                     
@@ -465,14 +519,39 @@ class LoRATrainer:
                         self.fabric.log("train/lr", scheduler.get_last_lr()[0], step=global_step)
                         yield global_step, avg_loss, f"Epoch {epoch+1}/{self.training_config.max_epochs}, Step {global_step}, Loss: {avg_loss:.4f}"
                     
-                    epoch_loss += accumulated_loss
-                    num_batches += 1
+                    epoch_loss += avg_loss
+                    num_updates += 1
                     accumulated_loss = 0.0
                     accumulation_step = 0
+
+            # Flush remainder to avoid dropping gradients when epoch length is not
+            # divisible by gradient_accumulation_steps.
+            if accumulation_step > 0:
+                self.fabric.clip_gradients(
+                    self.module.model.decoder,
+                    optimizer,
+                    max_norm=self.training_config.max_grad_norm,
+                )
+
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+
+                global_step += 1
+                avg_loss = accumulated_loss / accumulation_step
+                if global_step % self.training_config.log_every_n_steps == 0:
+                    self.fabric.log("train/loss", avg_loss, step=global_step)
+                    self.fabric.log("train/lr", scheduler.get_last_lr()[0], step=global_step)
+                    yield global_step, avg_loss, f"Epoch {epoch+1}/{self.training_config.max_epochs}, Step {global_step}, Loss: {avg_loss:.4f}"
+
+                epoch_loss += avg_loss
+                num_updates += 1
+                accumulated_loss = 0.0
+                accumulation_step = 0
             
             # End of epoch
             epoch_time = time.time() - epoch_start_time
-            avg_epoch_loss = epoch_loss / max(num_batches, 1)
+            avg_epoch_loss = epoch_loss / max(num_updates, 1)
             
             self.fabric.log("train/epoch_loss", avg_epoch_loss, step=epoch + 1)
             yield global_step, avg_epoch_loss, f"✅ Epoch {epoch+1}/{self.training_config.max_epochs} in {epoch_time:.1f}s, Loss: {avg_epoch_loss:.4f}"
@@ -521,7 +600,8 @@ class LoRATrainer:
             weight_decay=self.training_config.weight_decay,
         )
         
-        total_steps = len(train_loader) * self.training_config.max_epochs // self.training_config.gradient_accumulation_steps
+        steps_per_epoch = max(1, math.ceil(len(train_loader) / self.training_config.gradient_accumulation_steps))
+        total_steps = steps_per_epoch * self.training_config.max_epochs
         warmup_steps = min(self.training_config.warmup_steps, max(1, total_steps // 10))
         
         warmup_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps)
@@ -531,12 +611,13 @@ class LoRATrainer:
         global_step = 0
         accumulation_step = 0
         accumulated_loss = 0.0
+        optimizer.zero_grad(set_to_none=True)
         
         self.module.model.decoder.train()
         
         for epoch in range(self.training_config.max_epochs):
             epoch_loss = 0.0
-            num_batches = 0
+            num_updates = 0
             epoch_start_time = time.time()
             
             for batch in train_loader:
@@ -554,20 +635,36 @@ class LoRATrainer:
                     torch.nn.utils.clip_grad_norm_(trainable_params, self.training_config.max_grad_norm)
                     optimizer.step()
                     scheduler.step()
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                     global_step += 1
                     
+                    avg_loss = accumulated_loss / accumulation_step
                     if global_step % self.training_config.log_every_n_steps == 0:
-                        avg_loss = accumulated_loss / accumulation_step
                         yield global_step, avg_loss, f"Epoch {epoch+1}, Step {global_step}, Loss: {avg_loss:.4f}"
                     
-                    epoch_loss += accumulated_loss
-                    num_batches += 1
+                    epoch_loss += avg_loss
+                    num_updates += 1
                     accumulated_loss = 0.0
                     accumulation_step = 0
+
+            if accumulation_step > 0:
+                torch.nn.utils.clip_grad_norm_(trainable_params, self.training_config.max_grad_norm)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+
+                avg_loss = accumulated_loss / accumulation_step
+                if global_step % self.training_config.log_every_n_steps == 0:
+                    yield global_step, avg_loss, f"Epoch {epoch+1}, Step {global_step}, Loss: {avg_loss:.4f}"
+
+                epoch_loss += avg_loss
+                num_updates += 1
+                accumulated_loss = 0.0
+                accumulation_step = 0
             
             epoch_time = time.time() - epoch_start_time
-            avg_epoch_loss = epoch_loss / max(num_batches, 1)
+            avg_epoch_loss = epoch_loss / max(num_updates, 1)
             yield global_step, avg_epoch_loss, f"✅ Epoch {epoch+1}/{self.training_config.max_epochs} in {epoch_time:.1f}s"
             
             if (epoch + 1) % self.training_config.save_every_n_epochs == 0:

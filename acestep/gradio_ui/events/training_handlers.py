@@ -574,8 +574,48 @@ def start_training(
             dropout=lora_dropout,
         )
         
-        device_str = str(getattr(dit_handler, "device", ""))
-        pin_memory_device = "cuda" if device_str.startswith("cuda") else None
+        device_attr = getattr(dit_handler, "device", "")
+        if hasattr(device_attr, "type"):
+            device_type = str(device_attr.type).lower()
+        else:
+            device_type = str(device_attr).split(":", 1)[0].lower()
+
+        # Use device-tuned dataloader defaults while preserving CUDA acceleration.
+        if device_type == "cuda":
+            num_workers = 4
+            pin_memory = True
+            prefetch_factor = 2
+            persistent_workers = True
+            pin_memory_device = "cuda"
+            mixed_precision = "bf16"
+        elif device_type == "xpu":
+            num_workers = 4
+            pin_memory = True
+            prefetch_factor = 2
+            persistent_workers = True
+            pin_memory_device = None
+            mixed_precision = "bf16"
+        elif device_type == "mps":
+            num_workers = 0
+            pin_memory = False
+            prefetch_factor = 2
+            persistent_workers = False
+            pin_memory_device = None
+            mixed_precision = "fp16"
+        else:
+            cpu_count = os.cpu_count() or 2
+            num_workers = min(4, max(1, cpu_count // 2))
+            pin_memory = False
+            prefetch_factor = 2
+            persistent_workers = num_workers > 0
+            pin_memory_device = None
+            mixed_precision = "fp32"
+
+        logger.info(
+            f"Training loader config: device={device_type}, workers={num_workers}, "
+            f"pin_memory={pin_memory}, pin_memory_device={pin_memory_device}, "
+            f"persistent_workers={persistent_workers}"
+        )
         training_config = TrainingConfig(
             shift=training_shift,
             learning_rate=learning_rate,
@@ -585,7 +625,12 @@ def start_training(
             save_every_n_epochs=save_every_n_epochs,
             seed=training_seed,
             output_dir=lora_output_dir,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
             pin_memory_device=pin_memory_device,
+            mixed_precision=mixed_precision,
         )
         
         import pandas as pd
@@ -730,7 +775,6 @@ def export_lora(
     except Exception as e:
         logger.exception("Export error")
         return f"� Export failed: {str(e)}"
-
 
 
 
