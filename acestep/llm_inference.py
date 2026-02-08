@@ -23,7 +23,13 @@ from transformers.generation.logits_process import (
 )
 from acestep.constrained_logits_processor import MetadataConstrainedLogitsProcessor
 from acestep.constants import DEFAULT_LM_INSTRUCTION, DEFAULT_LM_UNDERSTAND_INSTRUCTION, DEFAULT_LM_INSPIRED_INSTRUCTION, DEFAULT_LM_REWRITE_INSTRUCTION
-from acestep.gpu_config import get_lm_gpu_memory_ratio, get_gpu_memory_gb, get_lm_model_size, get_global_gpu_config
+from acestep.gpu_config import (
+    get_lm_gpu_memory_ratio,
+    get_lm_model_size,
+    get_global_gpu_config,
+    get_best_device,
+    get_default_lm_backend,
+)
 
 
 def _warn_if_prerelease_python():
@@ -129,6 +135,40 @@ class LLMHandler:
 
         models.sort()
         return models
+
+    def _resolve_device(self, device: str) -> str:
+        """Resolve 'auto' device to a concrete backend."""
+        return get_best_device() if device == "auto" else device
+
+    def _resolve_backend(self, backend: str, device: str) -> str:
+        """Resolve backend with device-aware fallback."""
+        backend = (backend or "").strip().lower()
+        if backend not in {"vllm", "pt"}:
+            backend = get_default_lm_backend(device)
+        if backend == "vllm" and device != "cuda":
+            logger.warning(f"vllm requires CUDA; switching backend to PyTorch for device '{device}'")
+            backend = "pt"
+        return backend
+
+    def _empty_device_cache(self):
+        """Clear device cache for the active backend."""
+        device_type = str(self.device).split(":")[0]
+        if device_type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif device_type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            torch.xpu.empty_cache()
+        elif device_type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+            torch.mps.empty_cache()
+
+    def _synchronize_device(self):
+        """Synchronize device for the active backend."""
+        device_type = str(self.device).split(":")[0]
+        if device_type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elif device_type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            torch.xpu.synchronize()
+        elif device_type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
+            torch.mps.synchronize()
     
     def get_gpu_memory_utilization(self, model_path: str = None, minimal_gpu: float = 8, min_ratio: float = 0.2, max_ratio: float = 0.9) -> Tuple[float, bool]:
         """
@@ -143,6 +183,8 @@ class LLMHandler:
         Returns:
             Tuple of (gpu_memory_utilization_ratio, low_gpu_memory_mode)
         """
+        if not torch.cuda.is_available():
+            return 0.9, False
         try:
             device = torch.device("cuda:0")
             total_gpu_mem_bytes = torch.cuda.get_device_properties(device).total_memory
@@ -321,6 +363,33 @@ class LLMHandler:
             return torch.multinomial(probs, num_samples=1).squeeze(1)
         else:
             return torch.argmax(logits, dim=-1)
+
+        # Guard against numerical issues (especially on fp16/mps) and fully-masked rows.
+        scaled_logits = logits / max(temperature, 1e-6)
+        scaled_logits = torch.nan_to_num(scaled_logits, nan=float("-inf"), posinf=float("inf"), neginf=float("-inf"))
+
+        # Softmax in float32 is much more stable on MPS/FP16.
+        probs = torch.softmax(scaled_logits.float(), dim=-1)
+        probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
+
+        row_sums = probs.sum(dim=-1, keepdim=True)
+        invalid_rows = row_sums.squeeze(-1) <= 0
+
+        # Normalize valid rows only.
+        safe_row_sums = torch.where(row_sums > 0, row_sums, torch.ones_like(row_sums))
+        probs = probs / safe_row_sums
+
+        if torch.any(invalid_rows):
+            # Fall back to greedy token for rows that have no valid probability mass.
+            fallback_tokens = torch.argmax(torch.nan_to_num(logits.float(), nan=float("-inf")), dim=-1)
+            eos_id = getattr(self.llm_tokenizer, "eos_token_id", None)
+            if eos_id is not None:
+                fallback_tokens = torch.full_like(fallback_tokens, int(eos_id))
+            probs[invalid_rows] = 0.0
+            row_ids = torch.nonzero(invalid_rows, as_tuple=False).squeeze(-1)
+            probs[row_ids, fallback_tokens[invalid_rows]] = 1.0
+
+        return torch.multinomial(probs, num_samples=1).squeeze(1)
     
     def _check_eos_token(self, tokens: torch.Tensor, eos_token_id: int, pad_token_id: Optional[int]) -> bool:
         """Check if any token in the batch is EOS or pad token"""

@@ -13,6 +13,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from acestep.llm_inference import LLMHandler
+from acestep.gpu_config import get_default_lm_backend
 from loguru import logger
 from tqdm import tqdm
 
@@ -47,7 +48,7 @@ def generate_examples(num_examples=50, output_dir="examples/text2music", start_i
     status_msg, success = llm_handler.initialize(
         checkpoint_dir=checkpoint_dir,
         lm_model_path=lm_model,
-        backend="vllm",  # Use vllm for faster generation
+        backend=get_default_lm_backend("auto"),
         device="auto",
         offload_to_cpu=False,
         dtype=None,

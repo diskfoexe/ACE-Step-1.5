@@ -14,6 +14,7 @@ Centralized GPU memory detection and adaptive configuration management
 
 import os
 import sys
+import subprocess
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Tuple
 from loguru import logger
@@ -31,6 +32,53 @@ VRAM_16GB_MIN_GB = 16.0 - VRAM_16GB_TOLERANCE_GB  # treat as 16GB class if >= th
 # PyTorch installation URLs for diagnostics
 PYTORCH_CUDA_INSTALL_URL = "https://download.pytorch.org/whl/cu121"
 PYTORCH_ROCM_INSTALL_URL = "https://download.pytorch.org/whl/rocm6.0"
+
+
+def _get_macos_total_memory_gb() -> Optional[float]:
+    """Best-effort physical memory detection for macOS."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        raw = subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
+        total_bytes = int(raw)
+        return total_bytes / (1024 ** 3)
+    except Exception:
+        return None
+
+
+def _is_mps_available(torch_module) -> bool:
+    return (
+        hasattr(torch_module, "backends")
+        and hasattr(torch_module.backends, "mps")
+        and torch_module.backends.mps.is_available()
+    )
+
+
+def get_best_device() -> str:
+    """
+    Select the best available device for inference.
+    Priority: XPU > CUDA > MPS > CPU.
+    """
+    try:
+        import torch
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            return "xpu"
+        if torch.cuda.is_available():
+            return "cuda"
+        if _is_mps_available(torch):
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def get_default_lm_backend(device: str = "auto") -> str:
+    """
+    Get default LM backend for a given device.
+    vLLM is CUDA-only in this project; use PyTorch elsewhere.
+    """
+    resolved_device = get_best_device() if device == "auto" else str(device).split(":")[0].lower()
+    return "vllm" if resolved_device == "cuda" else "pt"
 
 
 @dataclass

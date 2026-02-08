@@ -1300,6 +1300,9 @@ def create_app() -> FastAPI:
                                 print(f"[API Server] Warning: Failed to download LM model {lm_model_name}: {e}")
 
                         lm_device = os.getenv("ACESTEP_LM_DEVICE", os.getenv("ACESTEP_DEVICE", "auto"))
+                        backend = (req.lm_backend or os.getenv("ACESTEP_LM_BACKEND") or get_default_lm_backend(lm_device)).strip().lower()
+                        if backend not in {"vllm", "pt"}:
+                            backend = get_default_lm_backend(lm_device)
                         lm_offload = _env_bool("ACESTEP_LM_OFFLOAD_TO_CPU", False)
 
                         status, ok = llm.initialize(
@@ -2096,6 +2099,9 @@ def create_app() -> FastAPI:
             if lm_backend not in {"vllm", "pt", "mlx"}:
                 lm_backend = "vllm"
             lm_device = os.getenv("ACESTEP_LM_DEVICE", device)
+            lm_backend = os.getenv("ACESTEP_LM_BACKEND", get_default_lm_backend(lm_device)).strip().lower()
+            if lm_backend not in {"vllm", "pt"}:
+                lm_backend = get_default_lm_backend(lm_device)
 
             # Auto-determine LM offload based on GPU config
             lm_offload_env = os.getenv("ACESTEP_LM_OFFLOAD_TO_CPU")
@@ -2209,7 +2215,7 @@ def create_app() -> FastAPI:
                 audio_format=p.str("audio_format", "mp3"),
                 use_tiled_decode=p.bool("use_tiled_decode", True),
                 lm_model_path=p.str("lm_model_path") or None,
-                lm_backend=p.str("lm_backend", "vllm"),
+                lm_backend=p.str("lm_backend", get_default_lm_backend()),
                 lm_temperature=p.float("lm_temperature", LM_DEFAULT_TEMPERATURE),
                 lm_cfg_scale=p.float("lm_cfg_scale", LM_DEFAULT_CFG_SCALE),
                 lm_top_k=p.int("lm_top_k"),
@@ -2599,6 +2605,9 @@ def create_app() -> FastAPI:
                         print(f"[API Server] Warning: Failed to download LM model {lm_model_name}: {e}")
 
                 lm_device = os.getenv("ACESTEP_LM_DEVICE", os.getenv("ACESTEP_DEVICE", "auto"))
+                backend = os.getenv("ACESTEP_LM_BACKEND", get_default_lm_backend(lm_device)).strip().lower()
+                if backend not in {"vllm", "pt"}:
+                    backend = get_default_lm_backend(lm_device)
                 lm_offload = _env_bool("ACESTEP_LM_OFFLOAD_TO_CPU", False)
 
                 h: AceStepHandler = app.state.handler

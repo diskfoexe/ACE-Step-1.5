@@ -191,7 +191,7 @@ def main():
                 "acestep-5Hz-lm-1.7B-v4-fix"
             )
         # Backend for service mode (from env or fallback to vllm)
-        args.backend = os.environ.get("SERVICE_MODE_BACKEND", "vllm")
+        args.backend = os.environ.get("SERVICE_MODE_BACKEND", get_default_lm_backend(args.device))
         print(f"  DiT model: {args.config_path}")
         print(f"  LM model: {args.lm_model_path}")
         print(f"  Backend: {args.backend}")

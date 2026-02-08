@@ -432,10 +432,14 @@ class AceStepHandler:
             self.quantization = quantization
             if self.quantization is not None:
                 assert compile_model, "Quantization requires compile_model to be True"
-                try:
-                    import torchao
-                except ImportError:
-                    raise ImportError("torchao is required for quantization but is not installed. Please install torchao to use quantization features.")
+                if device == "mps":
+                    logger.warning("[initialize_service] Quantization on MPS is unstable; disabling quantization.")
+                    self.quantization = None
+                if self.quantization is not None:
+                    try:
+                        import torchao
+                    except ImportError:
+                        raise ImportError("torchao is required for quantization but is not installed. Please install torchao to use quantization features.")
                 
 
             # Auto-detect project root (independent of passed project_root parameter)
@@ -706,6 +710,36 @@ class AceStepHandler:
         except Exception:
             target_type = "cpu" if str(target_device) == "cpu" else "cuda"
         return tensor.device.type == target_type
+
+    def _get_device_type(self, device: Optional[Union[str, torch.device]] = None) -> str:
+        """Normalize device string/object to canonical type name."""
+        resolved = device or self.device
+        if isinstance(resolved, torch.device):
+            return resolved.type
+        try:
+            return torch.device(str(resolved)).type
+        except Exception:
+            return str(resolved).split(":")[0].lower()
+
+    def _synchronize_device(self, device: Optional[Union[str, torch.device]] = None):
+        """Synchronize backend operations if supported by the device type."""
+        device_type = self._get_device_type(device)
+        if device_type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elif device_type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            torch.xpu.synchronize()
+        elif device_type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
+            torch.mps.synchronize()
+
+    def _empty_device_cache(self, device: Optional[Union[str, torch.device]] = None):
+        """Clear backend cache if supported by the device type."""
+        device_type = self._get_device_type(device)
+        if device_type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif device_type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            torch.xpu.empty_cache()
+        elif device_type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+            torch.mps.empty_cache()
     
     def _ensure_silence_latent_on_device(self):
         """Ensure silence_latent is on the correct device (self.device)."""

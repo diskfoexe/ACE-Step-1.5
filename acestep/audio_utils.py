@@ -10,6 +10,9 @@ Independent audio file operations outside of handler, supporting:
 import os
 import hashlib
 import json
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Union, Optional, List, Tuple
 import torch
@@ -84,18 +87,14 @@ class AudioSaver:
         
         # Ensure memory is contiguous
         audio_tensor = audio_tensor.contiguous()
+        audio_tensor = self._sanitize_audio_tensor(audio_tensor)
         
         # Select backend and save
         try:
             if format == "mp3":
-                # MP3 uses ffmpeg backend
-                torchaudio.save(
-                    str(output_path),
-                    audio_tensor,
-                    sample_rate,
-                    channels_first=True,
-                    backend='ffmpeg',
-                )
+                # Encode MP3 in a subprocess to avoid native encoder assertions
+                # crashing the Python process.
+                self._save_mp3_via_subprocess(audio_tensor, output_path, sample_rate)
             elif format in ["flac", "wav"]:
                 # FLAC and WAV use soundfile backend (fastest)
                 torchaudio.save(
@@ -118,6 +117,9 @@ class AudioSaver:
             return str(output_path)
             
         except Exception as e:
+            if format == "mp3":
+                logger.error(f"[AudioSaver] Failed to save audio as mp3: {e}")
+                raise
             try:
                 import soundfile as sf
                 audio_np = audio_tensor.transpose(0, 1).numpy()  # -> [samples, channels]
@@ -127,6 +129,59 @@ class AudioSaver:
             except Exception as e:
                 logger.error(f"[AudioSaver] Failed to save audio: {e}")
                 raise
+
+    def _sanitize_audio_tensor(self, audio_tensor: torch.Tensor) -> torch.Tensor:
+        """Sanitize audio for robust encoding across backends/codecs."""
+        if audio_tensor.dim() == 1:
+            audio_tensor = audio_tensor.unsqueeze(0)
+        if audio_tensor.dim() != 2:
+            raise ValueError(f"audio_tensor must be 2D [channels, samples], got shape={tuple(audio_tensor.shape)}")
+
+        # Keep at most stereo to avoid codec/backend incompatibilities.
+        if audio_tensor.shape[0] > 2:
+            audio_tensor = audio_tensor[:2, :]
+
+        # Replace invalid values and clamp to valid PCM float range.
+        audio_tensor = torch.nan_to_num(audio_tensor, nan=0.0, posinf=0.0, neginf=0.0)
+        audio_tensor = torch.clamp(audio_tensor, -1.0, 1.0)
+        return audio_tensor.contiguous()
+
+    def _save_mp3_via_subprocess(self, audio_tensor: torch.Tensor, output_path: Path, sample_rate: int):
+        """Encode MP3 via external ffmpeg process for crash isolation."""
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin is None:
+            raise RuntimeError("ffmpeg not found in PATH; cannot encode mp3 safely")
+        try:
+            import soundfile as sf
+        except ImportError as e:
+            raise RuntimeError("soundfile is required for safe mp3 export path") from e
+
+        with tempfile.TemporaryDirectory(prefix="acestep_mp3_") as tmpdir:
+            wav_path = Path(tmpdir) / "input.wav"
+
+            # Write temporary WAV first (fast and stable) via soundfile,
+            # avoiding torchaudio/torchcodec runtime coupling.
+            audio_np = audio_tensor.transpose(0, 1).cpu().numpy()  # [samples, channels]
+            sf.write(str(wav_path), audio_np, sample_rate, format="WAV")
+
+            cmd = [
+                ffmpeg_bin,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(wav_path),
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                str(output_path),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                stderr = (proc.stderr or "").strip()
+                raise RuntimeError(f"ffmpeg mp3 encode failed (code={proc.returncode}): {stderr}")
     
     def convert_audio(
         self,
@@ -351,4 +406,3 @@ def save_audio(
     return _default_saver.save_audio(
         audio_data, output_path, sample_rate, format, channels_first
     )
-

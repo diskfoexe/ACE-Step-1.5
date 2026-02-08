@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 
 from acestep.handler import AceStepHandler
 from acestep.llm_inference import LLMHandler
+from acestep.gpu_config import get_default_lm_backend
 from acestep.inference import (
     GenerationParams,
     GenerationConfig,
@@ -557,7 +558,8 @@ def create_app() -> FastAPI:
         print("[OpenRouter API] Loading LLM model...")
         checkpoint_dir = os.path.join(project_root, "checkpoints")
         lm_model_path = os.getenv("ACESTEP_LM_MODEL_PATH", "acestep-5Hz-lm-0.6B")
-        backend = os.getenv("ACESTEP_LM_BACKEND", "vllm")
+        lm_device = os.getenv("ACESTEP_LM_DEVICE", device)
+        backend = os.getenv("ACESTEP_LM_BACKEND", get_default_lm_backend(lm_device))
         lm_offload = _env_bool("ACESTEP_LM_OFFLOAD_TO_CPU", False)
 
         try:
@@ -565,7 +567,7 @@ def create_app() -> FastAPI:
                 checkpoint_dir=checkpoint_dir,
                 lm_model_path=lm_model_path,
                 backend=backend,
-                device=device,
+                device=lm_device,
                 offload_to_cpu=lm_offload,
                 dtype=None,
             )
