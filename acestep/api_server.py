@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import uuid4
 from loguru import logger
 
@@ -360,7 +360,7 @@ PARAM_ALIASES = {
     "guidance_scale": ["guidance_scale", "guidanceScale"],
     "use_random_seed": ["use_random_seed", "useRandomSeed"],
     "seed": ["seed"],
-    "audio_code_string": ["audio_code_string", "audioCodeString"],
+
     "audio_cover_strength": ["audio_cover_strength", "audioCoverStrength"],
     "reference_audio_path": ["reference_audio_path", "ref_audio_path", "referenceAudioPath", "refAudioPath"],
     "src_audio_path": ["src_audio_path", "ctx_audio_path", "sourceAudioPath", "srcAudioPath", "ctxAudioPath"],
@@ -476,14 +476,12 @@ class GenerateMusicRequest(BaseModel):
     inference_steps: int = 8
     guidance_scale: float = 7.0
     use_random_seed: bool = True
-    seed: int = -1
+    seed: Union[int, str] = -1
 
     reference_audio_path: Optional[str] = None
     src_audio_path: Optional[str] = None
     audio_duration: Optional[float] = None
     batch_size: Optional[int] = None
-
-    audio_code_string: str = ""
 
     repainting_start: float = 0.0
     repainting_end: Optional[float] = None
@@ -512,7 +510,7 @@ class GenerateMusicRequest(BaseModel):
 
     # 5Hz LM (server-side): used for metadata completion and (when thinking=True) codes generation.
     lm_model_path: Optional[str] = None  # e.g. "acestep-5Hz-lm-0.6B"
-    lm_backend: Literal["vllm", "pt"] = "vllm"
+    lm_backend: Literal["vllm", "pt", "mlx"] = "vllm"
 
     constrained_decoding: bool = True
     constrained_decoding_debug: bool = False
@@ -592,6 +590,9 @@ class _JobRecord:
     progress: float = 0.0  # 0.0 - 1.0
     stage: str = "queued"
     updated_at: Optional[float] = None
+    # OpenRouter integration: synchronous wait / streaming support
+    done_event: Optional[asyncio.Event] = None
+    progress_queue: Optional[asyncio.Queue] = None
 
 
 class _JobStore:
@@ -1268,7 +1269,7 @@ def create_app() -> FastAPI:
                         checkpoint_dir = os.path.join(project_root, "checkpoints")
                         lm_model_path = (req.lm_model_path or os.getenv("ACESTEP_LM_MODEL_PATH") or "acestep-5Hz-lm-0.6B").strip()
                         backend = (req.lm_backend or os.getenv("ACESTEP_LM_BACKEND") or "vllm").strip().lower()
-                        if backend not in {"vllm", "pt"}:
+                        if backend not in {"vllm", "pt", "mlx"}:
                             backend = "vllm"
 
                         # Auto-download LM model if not present
@@ -1480,7 +1481,7 @@ def create_app() -> FastAPI:
                     instruction=instruction_to_use,
                     reference_audio=req.reference_audio_path,
                     src_audio=req.src_audio_path,
-                    audio_codes=req.audio_code_string,
+                    audio_codes="",
                     caption=caption,
                     lyrics=lyrics,
                     instrumental=_is_instrumental(lyrics),
@@ -1611,6 +1612,7 @@ def create_app() -> FastAPI:
                     return {
                         "first_audio_path": None,
                         "audio_paths": [],
+                        "raw_audio_paths": [],
                         "generation_info": "Analysis Only Mode Complete",
                         "status_message": "Success",
                         "metas": metas_found,
@@ -1758,6 +1760,7 @@ def create_app() -> FastAPI:
                     "first_audio_path": _path_to_audio_url(first_audio) if first_audio else None,
                     "second_audio_path": _path_to_audio_url(second_audio) if second_audio else None,
                     "audio_paths": [_path_to_audio_url(p) for p in audio_paths],
+                    "raw_audio_paths": list(audio_paths),
                     "generation_info": generation_info,
                     "status_message": result.status_message,
                     "seed_value": seed_value,
@@ -1811,6 +1814,7 @@ def create_app() -> FastAPI:
         async def _queue_worker(worker_idx: int) -> None:
             while True:
                 job_id, req = await app.state.job_queue.get()
+                rec = store.get(job_id)
                 try:
                     async with app.state.pending_lock:
                         try:
@@ -1819,6 +1823,26 @@ def create_app() -> FastAPI:
                             pass
 
                     await _run_one_job(job_id, req)
+
+                    # Notify OpenRouter waiters after job completion
+                    if rec and rec.progress_queue:
+                        if rec.status == "succeeded" and rec.result:
+                            await rec.progress_queue.put({"type": "result", "result": rec.result})
+                        elif rec.status == "failed":
+                            await rec.progress_queue.put({"type": "error", "content": rec.error or "Generation failed"})
+                        await rec.progress_queue.put({"type": "done"})
+                    if rec and rec.done_event:
+                        rec.done_event.set()
+
+                except Exception as exc:
+                    # _run_one_job raised (e.g. _ensure_initialized failed)
+                    if rec and rec.status not in ("succeeded", "failed"):
+                        store.mark_failed(job_id, str(exc))
+                    if rec and rec.progress_queue:
+                        await rec.progress_queue.put({"type": "error", "content": str(exc)})
+                        await rec.progress_queue.put({"type": "done"})
+                    if rec and rec.done_event:
+                        rec.done_event.set()
                 finally:
                     await _cleanup_job_temp_files(job_id)
                     app.state.job_queue.task_done()
@@ -2050,7 +2074,7 @@ def create_app() -> FastAPI:
 
         if init_llm:
             lm_backend = os.getenv("ACESTEP_LM_BACKEND", "vllm").strip().lower()
-            if lm_backend not in {"vllm", "pt"}:
+            if lm_backend not in {"vllm", "pt", "mlx"}:
                 lm_backend = "vllm"
             lm_device = os.getenv("ACESTEP_LM_DEVICE", device)
 
@@ -2101,6 +2125,11 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="ACE-Step API", version="1.0", lifespan=lifespan)
 
+    # Mount OpenRouter-compatible endpoints (/v1/chat/completions, /v1/models)
+    from acestep.openrouter_adapter import create_openrouter_router
+    openrouter_router = create_openrouter_router(lambda: app.state)
+    app.include_router(openrouter_router)
+
     async def _queue_position(job_id: str) -> int:
         async with app.state.pending_lock:
             try:
@@ -2142,7 +2171,6 @@ def create_app() -> FastAPI:
                 use_random_seed=p.bool("use_random_seed", True),
                 seed=p.int("seed", -1),
                 batch_size=p.int("batch_size"),
-                audio_code_string=p.str("audio_code_string"),
                 repainting_start=p.float("repainting_start", 0.0),
                 repainting_end=p.float("repainting_end"),
                 instruction=p.str("instruction", DEFAULT_DIT_INSTRUCTION),
@@ -2536,7 +2564,7 @@ def create_app() -> FastAPI:
                 checkpoint_dir = os.path.join(project_root, "checkpoints")
                 lm_model_path = os.getenv("ACESTEP_LM_MODEL_PATH", "acestep-5Hz-lm-0.6B").strip()
                 backend = os.getenv("ACESTEP_LM_BACKEND", "vllm").strip().lower()
-                if backend not in {"vllm", "pt"}:
+                if backend not in {"vllm", "pt", "mlx"}:
                     backend = "vllm"
 
                 # Auto-download LM model if not present

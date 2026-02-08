@@ -45,7 +45,7 @@ from acestep.constants import (
     DEFAULT_DIT_INSTRUCTION,
 )
 from acestep.dit_alignment_score import MusicStampsAligner, MusicLyricScorer
-from acestep.gpu_config import get_gpu_memory_gb
+from acestep.gpu_config import get_gpu_memory_gb, get_global_gpu_config
 
 
 warnings.filterwarnings("ignore")
@@ -97,6 +97,7 @@ class AceStepHandler:
             "progress_estimates.json",
         )
         self._load_progress_estimates()
+        self.last_init_params = None
         
         # LoRA state
         self.lora_loaded = False
@@ -259,6 +260,9 @@ class AceStepHandler:
                 if use_lora:
                     self.model.decoder.enable_adapter_layers()
                     logger.info("LoRA adapter enabled")
+                    # Apply current scale when enabling LoRA
+                    if self.lora_scale != 1.0:
+                        self.set_lora_scale(self.lora_scale)
                 else:
                     self.model.decoder.disable_adapter_layers()
                     logger.info("LoRA adapter disabled")
@@ -283,10 +287,18 @@ class AceStepHandler:
         # Clamp scale to 0-1 range
         self.lora_scale = max(0.0, min(1.0, scale))
         
-        # Iterate through all LoRA layers and set their scaling
+        # Only apply scaling if LoRA is enabled
+        if not self.use_lora:
+            logger.info(f"LoRA scale set to {self.lora_scale:.2f} (will apply when LoRA is enabled)")
+            return f"✅ LoRA scale: {self.lora_scale:.2f} (LoRA disabled)"
+        
+        # Iterate through LoRA layers only and set their scaling
         try:
+            modified_count = 0
             for name, module in self.model.decoder.named_modules():
-                if hasattr(module, 'scaling'):
+                # Only modify LoRA modules - they have 'lora_' in their name
+                # This prevents modifying attention scaling and other non-LoRA modules
+                if 'lora_' in name and hasattr(module, 'scaling'):
                     scaling = module.scaling
                     # Handle dict-style scaling (adapter_name -> value)
                     if isinstance(scaling, dict):
@@ -296,14 +308,20 @@ class AceStepHandler:
                         # Apply new scale
                         for adapter_name in scaling:
                             module.scaling[adapter_name] = module._original_scaling[adapter_name] * self.lora_scale
+                        modified_count += 1
                     # Handle float-style scaling (single value)
                     elif isinstance(scaling, (int, float)):
                         if not hasattr(module, '_original_scaling'):
                             module._original_scaling = scaling
                         module.scaling = module._original_scaling * self.lora_scale
+                        modified_count += 1
             
-            logger.info(f"LoRA scale set to {self.lora_scale:.2f}")
-            return f"✅ LoRA scale: {self.lora_scale:.2f}"
+            if modified_count > 0:
+                logger.info(f"LoRA scale set to {self.lora_scale:.2f} (modified {modified_count} modules)")
+                return f"✅ LoRA scale: {self.lora_scale:.2f}"
+            else:
+                logger.warning("No LoRA scaling attributes found to modify")
+                return f"⚠️ Scale set to {self.lora_scale:.2f} (no modules found)"
         except Exception as e:
             logger.warning(f"Could not set LoRA scale: {e}")
             return f"⚠️ Scale set to {self.lora_scale:.2f} (partial)"
@@ -512,7 +530,7 @@ class AceStepHandler:
                     
                 silence_latent_path = os.path.join(acestep_v15_checkpoint_path, "silence_latent.pt")
                 if os.path.exists(silence_latent_path):
-                    self.silence_latent = torch.load(silence_latent_path).transpose(1, 2)
+                    self.silence_latent = torch.load(silence_latent_path, weights_only=True).transpose(1, 2)
                     # Always keep silence_latent on GPU - it's used in many places outside model context
                     # and is small enough that it won't significantly impact VRAM
                     self.silence_latent = self.silence_latent.to(device).to(self.dtype)
@@ -525,11 +543,13 @@ class AceStepHandler:
             vae_checkpoint_path = os.path.join(checkpoint_dir, "vae")
             if os.path.exists(vae_checkpoint_path):
                 self.vae = AutoencoderOobleck.from_pretrained(vae_checkpoint_path)
-                # Use bfloat16 for VAE on GPU, otherwise use self.dtype (float32 on CPU)
-                vae_dtype = self._get_vae_dtype(device)
                 if not self.offload_to_cpu:
+                    # Keep VAE in GPU precision when resident on accelerator.
+                    vae_dtype = self._get_vae_dtype(device)
                     self.vae = self.vae.to(device).to(vae_dtype)
                 else:
+                    # Use CPU-appropriate dtype when VAE is offloaded.
+                    vae_dtype = self._get_vae_dtype("cpu")
                     self.vae = self.vae.to("cpu").to(vae_dtype)
                 self.vae.eval()
             else:
@@ -571,6 +591,19 @@ class AceStepHandler:
             status_msg += f"Compiled: {compile_model}\n"
             status_msg += f"Offload to CPU: {self.offload_to_cpu}\n"
             status_msg += f"Offload DiT to CPU: {self.offload_dit_to_cpu}"
+
+            # Persist latest successful init settings for mode switching (e.g. training preset).
+            self.last_init_params = {
+                "project_root": project_root,
+                "config_path": config_path,
+                "device": device,
+                "use_flash_attention": use_flash_attention,
+                "compile_model": compile_model,
+                "offload_to_cpu": offload_to_cpu,
+                "offload_dit_to_cpu": offload_dit_to_cpu,
+                "quantization": quantization,
+                "prefer_source": prefer_source,
+            }
             
             return status_msg, True
             
@@ -578,6 +611,32 @@ class AceStepHandler:
             error_msg = f"❌ Error initializing model: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             logger.exception("[initialize_service] Error initializing model")
             return error_msg, False
+
+    def switch_to_training_preset(self) -> Tuple[str, bool]:
+        """Best-effort switch to a training-safe preset (non-quantized DiT)."""
+        if self.quantization is None:
+            return "Already in training-safe preset (quantization disabled).", True
+
+        if not self.last_init_params:
+            return "Cannot switch preset automatically: no previous init parameters found.", False
+
+        params = dict(self.last_init_params)
+        params["quantization"] = None
+
+        status, ok = self.initialize_service(
+            project_root=params["project_root"],
+            config_path=params["config_path"],
+            device=params["device"],
+            use_flash_attention=params["use_flash_attention"],
+            compile_model=params["compile_model"],
+            offload_to_cpu=params["offload_to_cpu"],
+            offload_dit_to_cpu=params["offload_dit_to_cpu"],
+            quantization=None,
+            prefer_source=params.get("prefer_source"),
+        )
+        if ok:
+            return f"Switched to training preset (quantization disabled).\n{status}", True
+        return f"Failed to switch to training preset.\n{status}", False
     
     def _empty_cache(self):
         """Clear accelerator memory cache (CUDA, XPU, or MPS)."""
@@ -785,7 +844,10 @@ class AceStepHandler:
             # Offload to CPU
             logger.info(f"[_load_model_context] Offloading {model_name} to CPU")
             start_time = time.time()
-            self._recursive_to_device(model, "cpu")
+            if model_name == "vae":
+                self._recursive_to_device(model, "cpu", self._get_vae_dtype("cpu"))
+            else:
+                self._recursive_to_device(model, "cpu")
             
             # NOTE: Do NOT offload silence_latent to CPU here!
             # silence_latent is used in many places outside of model context,
@@ -1337,10 +1399,16 @@ class AceStepHandler:
         return stop_event, thread
     
     def _get_vae_dtype(self, device: Optional[str] = None) -> torch.dtype:
-        """Get VAE dtype based on device."""
-        device = device or self.device
-        if device in ["cuda", "xpu", "mps"]:
+        """Get VAE dtype based on target device and GPU tier."""
+        target_device = device or self.device
+        if target_device in ["cuda", "xpu", "mps"]:
             return torch.bfloat16
+        if target_device == "cpu":
+            # On low-VRAM tiers (<=8GB), avoid CPU bfloat16 VAE path.
+            # This path is often extremely slow and can destabilize preprocessing.
+            gpu_config = get_global_gpu_config()
+            if gpu_config.tier in {"tier1", "tier2", "tier3"}:
+                return torch.float32
         return self.dtype
     
     def _format_instruction(self, instruction: str) -> str:
@@ -3258,8 +3326,27 @@ class AceStepHandler:
                     duration_sec=audio_duration if audio_duration and audio_duration > 0 else None,
                 )
             if self.debug_stats:
-                logger.debug(f"[generate_music] pred_latents: {pred_latents.shape}, dtype={pred_latents.dtype} {pred_latents.min()=}, {pred_latents.max()=}, {pred_latents.mean()=} {pred_latents.std()=}")
+                logger.debug(
+                    f"[generate_music] pred_latents: {pred_latents.shape}, dtype={pred_latents.dtype} "
+                    f"{pred_latents.min()=}, {pred_latents.max()=}, {pred_latents.mean()=} {pred_latents.std()=}"
+                )
+            else:
+                logger.debug(f"[generate_music] pred_latents: {pred_latents.shape}, dtype={pred_latents.dtype}")
             logger.debug(f"[generate_music] time_costs: {time_costs}")
+
+            if torch.isnan(pred_latents).any() or torch.isinf(pred_latents).any():
+                raise RuntimeError(
+                    "Generation produced NaN or Inf latents. "
+                    "This usually indicates a checkpoint/config mismatch "
+                    "or unsupported quantization/backend combination. "
+                    "Try running with --backend pt or verify your model checkpoints match this release."
+                )
+            if pred_latents.numel() > 0 and pred_latents.abs().sum() == 0:
+                raise RuntimeError(
+                    "Generation produced zero latents. "
+                    "This usually indicates a checkpoint/config mismatch or unsupported setup."
+                )
+
             if progress:
                 progress(0.8, desc="Decoding audio...")
             logger.info("[generate_music] Decoding latents with VAE...")
@@ -3282,6 +3369,17 @@ class AceStepHandler:
                     
                     logger.debug(f"[generate_music] Before VAE decode: allocated={self._memory_allocated()/1024**3:.2f}GB, max={self._max_memory_allocated()/1024**3:.2f}GB")
                     
+                    # ROCm fix: decode VAE on CPU to bypass MIOpen workspace bugs
+                    # On APUs with unified memory this has zero data-transfer cost
+                    import os as _os
+                    _vae_cpu = _os.environ.get("ACESTEP_VAE_ON_CPU", "0").lower() in ("1", "true", "yes")
+                    if _vae_cpu:
+                        logger.info("[generate_music] Moving VAE to CPU for decode (ACESTEP_VAE_ON_CPU=1)...")
+                        _vae_device = next(self.vae.parameters()).device
+                        self.vae = self.vae.cpu()
+                        pred_latents_for_decode = pred_latents_for_decode.cpu()
+                        self._empty_cache()
+
                     if use_tiled_decode:
                         logger.info("[generate_music] Using tiled VAE decode to reduce VRAM usage...")
                         pred_wavs = self.tiled_decode(pred_latents_for_decode)  # [batch, channels, samples]
@@ -3289,6 +3387,13 @@ class AceStepHandler:
                         decoder_output = self.vae.decode(pred_latents_for_decode)
                         pred_wavs = decoder_output.sample
                         del decoder_output
+
+                    if _vae_cpu:
+                        logger.info("[generate_music] VAE decode on CPU complete, restoring to GPU...")
+                        self.vae = self.vae.to(_vae_device)
+                        if pred_wavs.device.type != 'cpu':
+                            pass  # already on right device
+                        # pred_wavs stays on CPU - fine for audio post-processing
                     
                     logger.debug(f"[generate_music] After VAE decode: allocated={self._memory_allocated()/1024**3:.2f}GB, max={self._max_memory_allocated()/1024**3:.2f}GB")
                     
@@ -3298,12 +3403,11 @@ class AceStepHandler:
                     # Cast output to float32 for audio processing/saving (in-place if possible)
                     if pred_wavs.dtype != torch.float32:
                         pred_wavs = pred_wavs.float()
-                    
-                    # Anti-clipping normalization: scale down audio that exceeds [-1, 1] range
-                    # Uses 5*std as an estimate of peak amplitude; if already within range, leave unchanged
-                    std = torch.std(pred_wavs, dim=[1, 2], keepdim=True) * 5.0
-                    std[std < 1.0] = 1.0
-                    pred_wavs /= std
+
+                    # Anti-clipping normalization: only scale if peak exceeds [-1, 1].
+                    peak = pred_wavs.abs().amax(dim=[1, 2], keepdim=True)
+                    if torch.any(peak > 1.0):
+                        pred_wavs = pred_wavs / peak.clamp(min=1.0)
                     self._empty_cache()
             end_time = time.time()
             time_costs["vae_decode_time_cost"] = end_time - start_time
