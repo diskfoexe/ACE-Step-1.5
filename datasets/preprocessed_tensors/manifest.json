@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "name": "my_lora_dataset",
+    "custom_tag": "reggaeton",
+    "tag_position": "replace",
+    "created_at": "2026-02-10T16:40:09.711345",
+    "num_samples": 8,
+    "all_instrumental": true,
+    "genre_ratio": 0
+  },
+  "samples": [
+    "./datasets/preprocessed_tensors/01e8523a.pt",
+    "./datasets/preprocessed_tensors/28234a41.pt",
+    "./datasets/preprocessed_tensors/bceb1452.pt",
+    "./datasets/preprocessed_tensors/0c4a981e.pt",
+    "./datasets/preprocessed_tensors/1777a670.pt",
+    "./datasets/preprocessed_tensors/8e58ad6a.pt",
+    "./datasets/preprocessed_tensors/20eff0c4.pt",
+    "./datasets/preprocessed_tensors/3060117b.pt"
+  ],
+  "num_samples": 8
+}
