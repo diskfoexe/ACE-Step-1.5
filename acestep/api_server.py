@@ -890,21 +890,33 @@ class RequestParser:
 
 
 def _validate_audio_path(path: Optional[str]) -> Optional[str]:
-    """Validate a user-supplied audio file path to prevent path traversal attacks.
-
-    Rejects absolute paths and paths containing '..' traversal sequences.
-    Returns the validated path or None if the input is None/empty.
-    Raises HTTPException 400 if the path is unsafe.
-    """
+    """Validate a user-supplied audio file path to prevent path traversal attacks."""
     if not path:
         return None
-    # Reject absolute paths (Unix and Windows)
+    
+    # Get the system's real temporary directory path
+    import tempfile
+    system_temp = os.path.realpath(tempfile.gettempdir())
+    
+    try:
+        requested_path = os.path.realpath(path)
+        # ALLOW if the path is inside the system temp directory (server-generated files)
+        if requested_path.startswith(system_temp):
+            return path
+    except FileNotFoundError:
+        # Path doesn't exist, so it can't be a trusted server-generated absolute path.
+        # We'll proceed to check for other security issues like being an untrusted absolute path.
+        pass
+
+    # REJECT if it's an absolute path anywhere else
     if os.path.isabs(path):
-        raise HTTPException(status_code=400, detail="absolute audio file paths are not allowed")
-    # Reject path traversal via '..' components
+        raise HTTPException(status_code=400, detail="Absolute audio file paths are not allowed")
+        
+    # REJECT path traversal (..) for relative paths
     normalized = os.path.normpath(path)
     if ".." in normalized.split(os.sep):
-        raise HTTPException(status_code=400, detail="path traversal in audio file paths is not allowed")
+        raise HTTPException(status_code=400, detail="Path traversal in audio file paths is not allowed")
+        
     return path
 
 
@@ -2208,8 +2220,8 @@ def create_app() -> FastAPI:
                 repainting_end=p.float("repainting_end"),
                 instruction=p.str("instruction", DEFAULT_DIT_INSTRUCTION),
                 audio_cover_strength=p.float("audio_cover_strength", 1.0),
-                reference_audio_path=_validate_audio_path(ref_audio),
-                src_audio_path=_validate_audio_path(src_audio),
+                reference_audio_path=ref_audio,
+                src_audio_path=src_audio,
                 task_type=p.str("task_type", "text2music"),
                 use_adg=p.bool("use_adg"),
                 cfg_interval_start=p.float("cfg_interval_start", 0.0),
@@ -2240,8 +2252,14 @@ def create_app() -> FastAPI:
             if not isinstance(body, dict):
                 raise HTTPException(status_code=400, detail="JSON payload must be an object")
             verify_token_from_request(body, authorization)
-            req = _build_request(RequestParser(body))
 
+            # VALIDATE STRINGS HERE
+            p = RequestParser(body)
+            req = _build_request(
+                p,
+                reference_audio_path=_validate_audio_path(p.str("reference_audio_path") or None),
+                src_audio_path=_validate_audio_path(p.str("src_audio_path") or None)
+            )
         elif content_type.endswith("+json"):
             body = await request.json()
             if not isinstance(body, dict):
