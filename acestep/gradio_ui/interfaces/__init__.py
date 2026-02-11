@@ -105,19 +105,20 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
             status_msg = gr.Textbox(label="System Status", interactive=False)
 
             # --- Backend Logic ---
+
             def load_from_explorer(selected_file):
                 if not selected_file:
-                    return gr.update(value="", language="text")
+                    return gr.update(value="", language="markdown")
                 path = selected_file[0] if isinstance(selected_file, list) else selected_file
                 try:
                     with open(path, 'r', encoding='utf-8') as f:
                         content = f.read()
-                    # Determine language for syntax highlighting
+                    
                     ext = os.path.splitext(path)[1].lower()
-                    lang_map = {".json": "json", ".py": "python", ".txt": "text", ".yaml": "yaml"}
-                    return gr.update(value=content, language=lang_map.get(ext, "text"))
+                    lang_map = {".json": "json", ".py": "python", ".yaml": "yaml"}
+                    return gr.update(value=content, language=lang_map.get(ext, "markdown"))
                 except Exception as e:
-                    return gr.update(value=f"Error loading file: {str(e)}", language="text")
+                    return gr.update(value=f"Error: {str(e)}", language="markdown")
 
             def save_to_explorer(selected_file, content):
                 if not selected_file:
