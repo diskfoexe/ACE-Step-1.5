@@ -71,6 +71,26 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
             <p>{t("app.subtitle")}</p>
         </div>
         """)
+
+        
+        # --- תוספת העלאה מהירה ---
+        with gr.Accordion("העלאת שירים מהירה לתיקייה (Fast Upload)", open=False):
+            import shutil, os
+            u_files = gr.File(file_count="multiple", label="גרור לכאן את 19 השירים")
+            u_btn = gr.Button("שמור בתיקיית my_audio", variant="primary")
+            u_status = gr.Textbox(label="סטטוס")
+            
+            def quick_move(files):
+                target = "./my_audio"
+                os.makedirs(target, exist_ok=True)
+                for f in files:
+                    name = os.path.basename(f.name).replace(" ", "_")
+                    shutil.copy(f.name, os.path.join(target, name))
+                return f"הועלו {len(files)} קבצים בהצלחה!"
+            
+            u_btn.click(quick_move, u_files, u_status)
+        # ------------------------
+        
         
         # Dataset Explorer Section
         dataset_section = create_dataset_section(dataset_handler)
