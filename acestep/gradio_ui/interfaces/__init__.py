@@ -75,95 +75,105 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
 
         
         # --- ACE-Step Developer Tools (File Explorer, Editor, and Git) ---
+
         import shutil, os, subprocess
-        with gr.Accordion("🛠️ Developer Tools: Explorer & System", open=False):
+        with gr.Accordion("🛠️ Developer Tools: Explorer, Edit & System", open=False):
             
+            # 1. Upload Section
+            with gr.Group():
+                gr.Markdown("### 🚀 Upload Files")
+                upload_zone = gr.File(file_count="multiple", label="Drag & Drop files here")
+                upload_btn = gr.Button("Upload to Selected Folder", variant="primary")
+
             with gr.Row():
-                # Visual File Explorer
+                # 2. Visual File Explorer
                 explorer = gr.FileExplorer(
                     root_dir=".", 
-                    label="Project File System",
+                    label="Project File System (Select folders to upload or files to edit)",
                     file_count="single",
                     scale=3
                 )
                 
                 with gr.Column(scale=1):
+                    gr.Markdown("### Controls")
                     refresh_btn = gr.Button("🔄 Refresh Explorer")
                     delete_btn = gr.Button("🗑️ Delete Selected", variant="stop")
-                    git_update_btn = gr.Button("⚙️ Git Reset & Fetch", variant="secondary")
+                    git_btn = gr.Button("⚙️ Git Reset & Fetch", variant="secondary")
 
-            # Code Editor Group
+            # 3. Rename Section
+            with gr.Row():
+                new_name_input = gr.Textbox(placeholder="New name with extension (e.g. song1.flac)", label="Rename Selected Item")
+                rename_btn = gr.Button("✏️ Rename")
+
+            # 4. File Editor Section
             with gr.Group():
                 gr.Markdown("### 📝 File Editor")
-                code_editor = gr.Code(
-                    label="Edit Content (JSON, PY, TXT)", 
-                    language="json", 
-                    lines=20
-                )
+                code_editor = gr.Code(label="Code / Text Editor", language="markdown", lines=20)
                 save_btn = gr.Button("💾 Save Changes", variant="primary")
             
-            status_msg = gr.Textbox(label="System Status", interactive=False)
+            status_msg = gr.Textbox(label="System Status Log", interactive=False)
 
-            # --- Backend Logic ---
-
+            # --- Backend Logic Functions ---
             def load_from_explorer(selected_file):
-                if not selected_file:
-                    return gr.update(value="", language="markdown")
+                if not selected_file: return gr.update(value="", language="markdown")
                 path = selected_file[0] if isinstance(selected_file, list) else selected_file
+                if os.path.isdir(path): return gr.update(value=f"# Directory: {path}\nSelect a file to edit content.", language="markdown")
                 try:
                     with open(path, 'r', encoding='utf-8') as f:
                         content = f.read()
-                    
                     ext = os.path.splitext(path)[1].lower()
-                    lang_map = {".json": "json", ".py": "python", ".yaml": "yaml"}
+                    lang_map = {".json": "json", ".py": "python", ".yaml": "yaml", ".txt": "markdown"}
                     return gr.update(value=content, language=lang_map.get(ext, "markdown"))
                 except Exception as e:
-                    return gr.update(value=f"Error: {str(e)}", language="markdown")
+                    return gr.update(value=f"Error loading: {str(e)}", language="markdown")
 
             def save_to_explorer(selected_file, content):
-                if not selected_file:
-                    return "No file selected to save!"
+                if not selected_file: return "No file selected!"
                 path = selected_file[0] if isinstance(selected_file, list) else selected_file
+                if os.path.isdir(path): return "Cannot save content to a directory."
                 try:
                     with open(path, 'w', encoding='utf-8') as f:
                         f.write(content)
-                    return f"Successfully saved: {os.path.basename(path)}"
-                except Exception as e:
-                    return f"Error saving file: {str(e)}"
+                    return f"Saved successfully: {os.path.basename(path)}"
+                except Exception as e: return f"Save error: {str(e)}"
 
-            def delete_from_explorer(selected_file):
-                if not selected_file:
-                    return "Select a file or folder in the explorer first."
-                path = selected_file[0] if isinstance(selected_file, list) else selected_file
+            def handle_upload(files, selected_path):
+                if not files: return "No files selected."
+                target_dir = selected_path[0] if selected_path else "./my_audio"
+                if os.path.isfile(target_dir): target_dir = os.path.dirname(target_dir)
+                os.makedirs(target_dir, exist_ok=True)
+                for f in files:
+                    clean_name = os.path.basename(f.name).replace(" ", "_")
+                    shutil.copy(f.name, os.path.join(target_dir, clean_name))
+                return f"Uploaded {len(files)} files to: {target_dir}"
+
+            def rename_item(selected_path, new_name):
+                if not selected_path or not new_name: return "Select an item and enter a name."
+                old_path = selected_path[0] if isinstance(selected_path, list) else selected_path
+                new_path = os.path.join(os.path.dirname(old_path), new_name.replace(" ", "_"))
                 try:
-                    if os.path.isdir(path):
-                        shutil.rmtree(path)
-                    else:
-                        os.remove(path)
+                    os.rename(old_path, new_path)
+                    return f"Renamed to {new_name}"
+                except Exception as e: return f"Error: {str(e)}"
+
+            def delete_item(selected_path):
+                if not selected_path: return "Select something to delete."
+                path = selected_path[0] if isinstance(selected_path, list) else selected_path
+                try:
+                    if os.path.isdir(path): shutil.rmtree(path)
+                    else: os.remove(path)
                     return f"Deleted: {path}"
-                except Exception as e:
-                    return f"Error deleting: {str(e)}"
-
-            def run_git_reset():
-                try:
-                    subprocess.run("git fetch --all && git reset --hard origin/main", shell=True, check=True)
-                    return "Repository updated successfully. Please restart the server to apply changes."
-                except Exception as e:
-                    return f"Git Error: {str(e)}"
+                except Exception as e: return f"Error: {str(e)}"
 
             # --- Event Handlers ---
-            # Auto-load file when clicked in the Explorer
-            explorer.change(load_from_explorer, inputs=explorer, outputs=code_editor)
-            
+            explorer.change(load_from_explorer, explorer, code_editor)
+            upload_btn.click(handle_upload, [upload_zone, explorer], status_msg).then(lambda: gr.update(), None, explorer)
             save_btn.click(save_to_explorer, [explorer, code_editor], status_msg)
-            
-            delete_btn.click(delete_from_explorer, explorer, status_msg).then(
-                lambda: gr.update(), None, explorer
-            )
-            
+            rename_btn.click(rename_item, [explorer, new_name_input], status_msg).then(lambda: gr.update(), None, explorer)
+            delete_btn.click(delete_item, explorer, status_msg).then(lambda: gr.update(), None, explorer)
             refresh_btn.click(lambda: gr.update(), None, explorer)
-            
-            git_update_btn.click(run_git_reset, None, status_msg)
+            git_btn.click(lambda: subprocess.run("git fetch --all && git reset --hard origin/main", shell=True) or "System Updated", None, status_msg)
+        
         # ------------------------
         
         
