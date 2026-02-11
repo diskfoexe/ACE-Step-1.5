@@ -72,24 +72,99 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
         </div>
         """)
 
+
         
-        # --- תוספת העלאה מהירה ---
-        with gr.Accordion("העלאת שירים מהירה לתיקייה (Fast Upload)", open=False):
-            import shutil, os
-            u_files = gr.File(file_count="multiple", label="גרור לכאן את 19 השירים")
-            u_btn = gr.Button("שמור בתיקיית my_audio", variant="primary")
-            u_status = gr.Textbox(label="סטטוס")
+        # --- ACE-Step Developer Tools (File Explorer, Editor, and Git) ---
+        import shutil, os, subprocess
+        with gr.Accordion("🛠️ Developer Tools: Explorer & System", open=False):
             
-            def quick_move(files):
-                target = "./my_audio"
-                os.makedirs(target, exist_ok=True)
-                for f in files:
-                    name = os.path.basename(f.name).replace(" ", "_")
-                    shutil.copy(f.name, os.path.join(target, name))
-                return f"הועלו {len(files)} קבצים בהצלחה!"
+            with gr.Row():
+                # Visual File Explorer
+                explorer = gr.FileExplorer(
+                    root_dir=".", 
+                    label="Project File System",
+                    file_count="single",
+                    scale=3
+                )
+                
+                with gr.Column(scale=1):
+                    refresh_btn = gr.Button("🔄 Refresh Explorer")
+                    delete_btn = gr.Button("🗑️ Delete Selected", variant="stop")
+                    git_update_btn = gr.Button("⚙️ Git Reset & Fetch", variant="secondary")
+
+            # Code Editor Group
+            with gr.Group():
+                gr.Markdown("### 📝 File Editor")
+                code_editor = gr.Code(
+                    label="Edit Content (JSON, PY, TXT)", 
+                    language="json", 
+                    lines=20
+                )
+                save_btn = gr.Button("💾 Save Changes", variant="primary")
             
-            u_btn.click(quick_move, u_files, u_status)
+            status_msg = gr.Textbox(label="System Status", interactive=False)
+
+            # --- Backend Logic ---
+            def load_from_explorer(selected_file):
+                if not selected_file:
+                    return gr.update(value="", language="text")
+                path = selected_file[0] if isinstance(selected_file, list) else selected_file
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    # Determine language for syntax highlighting
+                    ext = os.path.splitext(path)[1].lower()
+                    lang_map = {".json": "json", ".py": "python", ".txt": "text", ".yaml": "yaml"}
+                    return gr.update(value=content, language=lang_map.get(ext, "text"))
+                except Exception as e:
+                    return gr.update(value=f"Error loading file: {str(e)}", language="text")
+
+            def save_to_explorer(selected_file, content):
+                if not selected_file:
+                    return "No file selected to save!"
+                path = selected_file[0] if isinstance(selected_file, list) else selected_file
+                try:
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    return f"Successfully saved: {os.path.basename(path)}"
+                except Exception as e:
+                    return f"Error saving file: {str(e)}"
+
+            def delete_from_explorer(selected_file):
+                if not selected_file:
+                    return "Select a file or folder in the explorer first."
+                path = selected_file[0] if isinstance(selected_file, list) else selected_file
+                try:
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                    return f"Deleted: {path}"
+                except Exception as e:
+                    return f"Error deleting: {str(e)}"
+
+            def run_git_reset():
+                try:
+                    subprocess.run("git fetch --all && git reset --hard origin/main", shell=True, check=True)
+                    return "Repository updated successfully. Please restart the server to apply changes."
+                except Exception as e:
+                    return f"Git Error: {str(e)}"
+
+            # --- Event Handlers ---
+            # Auto-load file when clicked in the Explorer
+            explorer.change(load_from_explorer, inputs=explorer, outputs=code_editor)
+            
+            save_btn.click(save_to_explorer, [explorer, code_editor], status_msg)
+            
+            delete_btn.click(delete_from_explorer, explorer, status_msg).then(
+                lambda: gr.update(), None, explorer
+            )
+            
+            refresh_btn.click(lambda: gr.update(), None, explorer)
+            
+            git_update_btn.click(run_git_reset, None, status_msg)
         # ------------------------
+        
         
         
         # Dataset Explorer Section
