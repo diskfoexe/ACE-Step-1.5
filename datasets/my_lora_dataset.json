@@ -11,7 +11,7 @@
   "samples": [
     {
       "id": "c53e88e4",
-      "audio_path": "./my_audio/02 - King Daddy.flac",
+      "audio_path": "./my_audio/02_-_King_Daddy.flac",
       "filename": "02 - King Daddy.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -30,7 +30,7 @@
     },
     {
       "id": "0b0c626e",
-      "audio_path": "./my_audio/03 - Dale Caliente.flac",
+      "audio_path": "./my_audio/03_-_Dale_Caliente.flac",
       "filename": "03 - Dale Caliente.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -49,7 +49,7 @@
     },
     {
       "id": "9fd241cf",
-      "audio_path": "./my_audio/04 - No Me Dejes Solo.flac",
+      "audio_path": "./my_audio/04_-_No_Me_Dejes_Solo.flac",
       "filename": "04 - No Me Dejes Solo.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -68,7 +68,7 @@
     },
     {
       "id": "15c436c3",
-      "audio_path": "./my_audio/05 - Gasolina.flac",
+      "audio_path": "./my_audio/05_-_Gasolina.flac",
       "filename": "05 - Gasolina.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -87,7 +87,7 @@
     },
     {
       "id": "3de257b6",
-      "audio_path": "./my_audio/06 - Like You.flac",
+      "audio_path": "./my_audio/06_-_Like_You.flac",
       "filename": "06 - Like You.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -106,7 +106,7 @@
     },
     {
       "id": "6b22c85c",
-      "audio_path": "./my_audio/07 - El Muro.flac",
+      "audio_path": "./my_audio/07_-_El_Muro.flac",
       "filename": "07 - El Muro.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -125,7 +125,7 @@
     },
     {
       "id": "e34e97e3",
-      "audio_path": "./my_audio/08 - Lo Que Paso, Paso.flac",
+      "audio_path": "./my_audio/08_-_Lo_Que_Paso,_Paso.flac",
       "filename": "08 - Lo Que Paso, Paso.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -144,7 +144,7 @@
     },
     {
       "id": "8985c5a7",
-      "audio_path": "./my_audio/09 - Tu Principe.flac",
+      "audio_path": "./my_audio/09_-_Tu_Principe.flac",
       "filename": "09 - Tu Principe.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -163,7 +163,7 @@
     },
     {
       "id": "25e59c0a",
-      "audio_path": "./my_audio/10 - Cuentame.flac",
+      "audio_path": "./my_audio/10_-_Cuentame.flac",
       "filename": "10 - Cuentame.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -182,7 +182,7 @@
     },
     {
       "id": "6bf5171c",
-      "audio_path": "./my_audio/11 - Santifica Tus Escapularios.flac",
+      "audio_path": "./my_audio/11_-_Santifica_Tus_Escapularios.flac",
       "filename": "11 - Santifica Tus Escapularios.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -201,7 +201,7 @@
     },
     {
       "id": "6483251c",
-      "audio_path": "./my_audio/12 - Sabor a Melao.flac",
+      "audio_path": "./my_audio/12_-_Sabor_a_Melao.flac",
       "filename": "12 - Sabor a Melao.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -220,7 +220,7 @@
     },
     {
       "id": "9d99fa44",
-      "audio_path": "./my_audio/13 - El Empuje.flac",
+      "audio_path": "./my_audio/13_-_El_Empuje.flac",
       "filename": "13 - El Empuje.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -239,7 +239,7 @@
     },
     {
       "id": "9b72c828",
-      "audio_path": "./my_audio/14 - Que Vas a Hacer.flac",
+      "audio_path": "./my_audio/14_-_Que_Vas_a_Hacer.flac",
       "filename": "14 - Que Vas a Hacer.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -258,7 +258,7 @@
     },
     {
       "id": "34871bca",
-      "audio_path": "./my_audio/15 - Salud y Vida.flac",
+      "audio_path": "./my_audio/15_-_Salud_y_Vida.flac",
       "filename": "15 - Salud y Vida.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -277,7 +277,7 @@
     },
     {
       "id": "2eaea77e",
-      "audio_path": "./my_audio/17 - Corazones.flac",
+      "audio_path": "./my_audio/17_-_Corazones.flac",
       "filename": "17 - Corazones.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -296,7 +296,7 @@
     },
     {
       "id": "28270544",
-      "audio_path": "./my_audio/18 - Golpe de Estado.flac",
+      "audio_path": "./my_audio/18_-_Golpe_de_Estado.flac",
       "filename": "18 - Golpe de Estado.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -315,7 +315,7 @@
     },
     {
       "id": "72e39b2e",
-      "audio_path": "./my_audio/19 - 2 Mujeres.flac",
+      "audio_path": "./my_audio/19_-_2_Mujeres.flac",
       "filename": "19 - 2 Mujeres.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -334,7 +334,7 @@
     },
     {
       "id": "7bd52632",
-      "audio_path": "./my_audio/20 - Saber Su Nombre.flac",
+      "audio_path": "./my_audio/20_-_Saber_Su_Nombre.flac",
       "filename": "20 - Saber Su Nombre.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
@@ -353,7 +353,7 @@
     },
     {
       "id": "15e3157c",
-      "audio_path": "./my_audio/21 - Outro.flac",
+      "audio_path": "./my_audio/21_-_Outro.flac",
       "filename": "21 - Outro.flac",
       "caption": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
       "genre": "Daddy Yankee, Old School Reggaeton, Perreo, Heavy Bass, 2000s Style, Deep Male Vocal",
