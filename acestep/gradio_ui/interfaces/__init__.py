@@ -74,121 +74,22 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
 
 
         
-        # --- ACE-Step Developer Tools (File Explorer, Editor, and Git) ---
-
-        import shutil, os, subprocess
-        with gr.Accordion("🛠️ Developer Tools: Explorer, Edit & System", open=False):
+        # --- תוספת העלאה מהירה ---
+        with gr.Accordion("העלאת שירים מהירה לתיקייה (Fast Upload)", open=False):
+            import shutil, os
+            u_files = gr.File(file_count="multiple", label="גרור לכאן את 19 השירים")
+            u_btn = gr.Button("שמור בתיקיית my_audio", variant="primary")
+            u_status = gr.Textbox(label="סטטוס")
             
-            # 1. Upload Section
-            with gr.Group():
-                gr.Markdown("### 🚀 Upload Files")
-                upload_zone = gr.File(file_count="multiple", label="Drag & Drop files here")
-                upload_btn = gr.Button("Upload to Selected Folder", variant="primary")
-
-            with gr.Row():
-                # 2. Visual File Explorer
-                explorer = gr.FileExplorer(
-                    root_dir=".", 
-                    label="Project File System",
-                    file_count="single",
-                    scale=3
-                )
-                
-                with gr.Column(scale=1):
-                    gr.Markdown("### Controls")
-                    refresh_btn = gr.Button("🔄 Refresh Explorer")
-                    delete_btn = gr.Button("🗑️ Delete Selected", variant="stop")
-                    git_btn = gr.Button("⚙️ Git Reset & Fetch", variant="secondary")
-
-            # 3. Rename & Create Folder Section (The missing part!)
-            with gr.Row():
-                with gr.Column():
-                    new_name_input = gr.Textbox(placeholder="New name (e.g. song1.flac)", label="Rename Selected Item")
-                    rename_btn = gr.Button("✏️ Rename")
-                with gr.Column():
-                    new_folder_input = gr.Textbox(placeholder="New folder name", label="Create New Folder")
-                    make_folder_btn = gr.Button("📁 Create Folder")
-
-            # 4. File Editor Section
-            with gr.Group():
-                gr.Markdown("### 📝 File Editor")
-                code_editor = gr.Code(label="Code / Text Editor", language="markdown", lines=20)
-                save_btn = gr.Button("💾 Save Changes", variant="primary")
-            
-            status_msg = gr.Textbox(label="System Status Log", interactive=False)
-
-            # --- Backend Logic ---
-            def load_from_explorer(selected_file):
-                if not selected_file: return gr.update(value="", language="markdown")
-                path = selected_file[0] if isinstance(selected_file, list) else selected_file
-                if os.path.isdir(path): return gr.update(value=f"# Directory: {path}\nSelect a file to edit.", language="markdown")
-                try:
-                    with open(path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    ext = os.path.splitext(path)[1].lower()
-                    lang_map = {".json": "json", ".py": "python", ".yaml": "yaml"}
-                    return gr.update(value=content, language=lang_map.get(ext, "markdown"))
-                except Exception as e: return gr.update(value=f"Error: {str(e)}", language="markdown")
-
-            def create_new_folder(selected_path, folder_name):
-                if not folder_name: return "Please enter a folder name."
-                # If a folder is selected, create inside it. Otherwise, create in root.
-                base_dir = selected_path[0] if selected_path else "."
-                if os.path.isfile(base_dir): base_dir = os.path.dirname(base_dir)
-                
-                new_path = os.path.join(base_dir, folder_name.replace(" ", "_"))
-                try:
-                    os.makedirs(new_path, exist_ok=True)
-                    return f"Folder created: {new_path}"
-                except Exception as e: return f"Error: {str(e)}"
-
-            def rename_item(selected_path, new_name):
-                if not selected_path or not new_name: return "Select an item and enter a name."
-                old_path = selected_path[0] if isinstance(selected_path, list) else selected_path
-                new_path = os.path.join(os.path.dirname(old_path), new_name.replace(" ", "_"))
-                try:
-                    os.rename(old_path, new_path)
-                    return f"Renamed to {new_name}"
-                except Exception as e: return f"Error: {str(e)}"
-
-            def handle_upload(files, selected_path):
-                if not files: return "No files selected."
-                target_dir = selected_path[0] if selected_path else "./my_audio"
-                if os.path.isfile(target_dir): target_dir = os.path.dirname(target_dir)
-                os.makedirs(target_dir, exist_ok=True)
+            def quick_move(files):
+                target = "./my_audio"
+                os.makedirs(target, exist_ok=True)
                 for f in files:
-                    clean_name = os.path.basename(f.name).replace(" ", "_")
-                    shutil.copy(f.name, os.path.join(target_dir, clean_name))
-                return f"Uploaded to: {target_dir}"
-
-            def delete_item(selected_path):
-                if not selected_path: return "Select something to delete."
-                path = selected_path[0] if isinstance(selected_path, list) else selected_path
-                try:
-                    if os.path.isdir(path): shutil.rmtree(path)
-                    else: os.remove(path)
-                    return f"Deleted: {path}"
-                except Exception as e: return f"Error: {str(e)}"
-
-            def save_to_explorer(selected_file, content):
-                if not selected_file: return "No file selected!"
-                path = selected_file[0] if isinstance(selected_file, list) else selected_file
-                try:
-                    with open(path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    return f"Saved: {os.path.basename(path)}"
-                except Exception as e: return f"Error: {str(e)}"
-
-            # --- Event Handlers ---
-            explorer.change(load_from_explorer, explorer, code_editor)
-            make_folder_btn.click(create_new_folder, [explorer, new_folder_input], status_msg).then(lambda: gr.update(), None, explorer)
-            rename_btn.click(rename_item, [explorer, new_name_input], status_msg).then(lambda: gr.update(), None, explorer)
-            upload_btn.click(handle_upload, [upload_zone, explorer], status_msg).then(lambda: gr.update(), None, explorer)
-            save_btn.click(save_to_explorer, [explorer, code_editor], status_msg)
-            delete_btn.click(delete_item, explorer, status_msg).then(lambda: gr.update(), None, explorer)
-            refresh_btn.click(lambda: gr.update(), None, explorer)
-            git_btn.click(lambda: subprocess.run("git fetch --all && git reset --hard origin/main", shell=True) or "System Updated", None, status_msg)
-        
+                    name = os.path.basename(f.name).replace(" ", "_")
+                    shutil.copy(f.name, os.path.join(target, name))
+                return f"הועלו {len(files)} קבצים בהצלחה!"
+            
+            u_btn.click(quick_move, u_files, u_status)
         # ------------------------
         
         
