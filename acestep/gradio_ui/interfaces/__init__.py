@@ -74,12 +74,12 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
 
 
         
-        # --- תוספת העלאה מהירה ---
-        with gr.Accordion("העלאת שירים מהירה לתיקייה (Fast Upload)", open=False):
+        # -----
+        with gr.Accordion("Fast Upload", open=False):
             import shutil, os
-            u_files = gr.File(file_count="multiple", label="גרור לכאן את 19 השירים")
-            u_btn = gr.Button("שמור בתיקיית my_audio", variant="primary")
-            u_status = gr.Textbox(label="סטטוס")
+            u_files = gr.File(file_count="multiple", label="Upload your songs + my_lora_dataset.json")
+            u_btn = gr.Button("Save in folder my_audio", variant="primary")
+            u_status = gr.Textbox(label="Status")
             
             def quick_move(files):
                 target = "./my_audio"
@@ -87,10 +87,10 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
                 for f in files:
                     name = os.path.basename(f.name).replace(" ", " ")
                     shutil.copy(f.name, os.path.join(target, name))
-                return f"הועלו {len(files)} קבצים בהצלחה!"
+                return f"{len(files)} Uploaded!"
             
             u_btn.click(quick_move, u_files, u_status)
-        # ------------------------
+        # -----
         
         
         
