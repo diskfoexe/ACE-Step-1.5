@@ -85,7 +85,7 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
                 target = "./my_audio"
                 os.makedirs(target, exist_ok=True)
                 for f in files:
-                    name = os.path.basename(f.name).replace(" ", "_")
+                    name = os.path.basename(f.name).replace(" ", " ")
                     shutil.copy(f.name, os.path.join(target, name))
                 return f"הועלו {len(files)} קבצים בהצלחה!"
             
