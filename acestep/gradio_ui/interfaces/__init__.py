@@ -78,11 +78,11 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
         with gr.Accordion("Fast Upload", open=False):
             import shutil, os
             u_files = gr.File(file_count="multiple", label="Upload your songs + my_lora_dataset.json")
-            u_btn = gr.Button("Save in folder my_audio", variant="primary")
+            u_btn = gr.Button("Save in folder dataset", variant="primary")
             u_status = gr.Textbox(label="Status")
             
             def quick_move(files):
-                target = "./my_audio"
+                target = "./dataset"
                 os.makedirs(target, exist_ok=True)
                 for f in files:
                     name = os.path.basename(f.name).replace(" ", " ")
