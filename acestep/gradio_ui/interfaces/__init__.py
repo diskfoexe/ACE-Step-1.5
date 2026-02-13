@@ -75,14 +75,32 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
 
         
         # -----
-        with gr.Accordion("Fast Upload", open=False):
+        with gr.Accordion("Upload", open=False):
             import shutil, os
-            u_files = gr.File(file_count="multiple", label="Upload your songs + my_lora_dataset.json")
-            u_btn = gr.Button("Save in folder dataset", variant="primary")
+            u_files = gr.File(file_count="multiple", label="Upload songs + my_lora_dataset.json")
+            u_btn = gr.Button("Save in folder datasets", variant="primary")
             u_status = gr.Textbox(label="Status")
             
             def quick_move(files):
                 target = "./datasets"
+                os.makedirs(target, exist_ok=True)
+                for f in files:
+                    name = os.path.basename(f.name).replace(" ", " ")
+                    shutil.copy(f.name, os.path.join(target, name))
+                return f"{len(files)} Uploaded!"
+            
+            u_btn.click(quick_move, u_files, u_status)
+        # -----
+
+        # -----
+        with gr.Accordion("Upload2", open=False):
+            import shutil, os
+            u_files = gr.File(file_count="multiple", label="Upload preprocessed_tensors")
+            u_btn = gr.Button("Save in folder preprocessed_tensors", variant="primary")
+            u_status = gr.Textbox(label="Status")
+            
+            def quick_move(files):
+                target = "./datasets/preprocessed_tensors"
                 os.makedirs(target, exist_ok=True)
                 for f in files:
                     name = os.path.basename(f.name).replace(" ", " ")
