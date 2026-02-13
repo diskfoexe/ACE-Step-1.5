@@ -82,7 +82,7 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
             u_status = gr.Textbox(label="Status")
             
             def quick_move(files):
-                target = "./dataset"
+                target = "./datasets"
                 os.makedirs(target, exist_ok=True)
                 for f in files:
                     name = os.path.basename(f.name).replace(" ", " ")
