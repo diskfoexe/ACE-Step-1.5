@@ -379,6 +379,8 @@ python -m acestep.acestep_v15_pipeline --port 7680
 
 On Windows, use `.venv\Scripts\activate` and the same steps.
 
+> **Note:** `torchcodec` is not available for AMD ROCm GPUs due to CUDA-specific dependencies. ACE-Step automatically uses `soundfile` as a fallback for audio I/O, which provides full functionality on ROCm platforms.
+
 ### GPU Detection Troubleshooting
 
 If you see "No GPU detected, running on CPU" with an AMD GPU:
@@ -412,7 +414,9 @@ See [ACE-Step1.5-Rocm-Manual-Linux.md](ACE-Step1.5-Rocm-Manual-Linux.md) for a d
 | nanovllm acceleration | NOT supported on Intel GPUs |
 | Test Environment | PyTorch 2.8.0 from [Intel Extension for PyTorch](https://pytorch-extension.intel.com/?request=platform) |
 
-> Note: LLM inference speed may decrease when generating audio longer than 2 minutes. Intel discrete GPUs are expected to work but not yet tested.
+> **Note:** LLM inference speed may decrease when generating audio longer than 2 minutes. Intel discrete GPUs are expected to work but not yet tested.
+> 
+> **Audio I/O:** `torchcodec` is not available for Intel XPU GPUs. ACE-Step automatically uses `soundfile` as a fallback for audio I/O, which provides full functionality on Intel platforms.
 
 ---
 
@@ -502,7 +506,7 @@ ACESTEP_INIT_LLM=false
 | `--init_llm` | auto | LLM init: `true` / `false` / omit for auto |
 | `--config_path` | auto | DiT model (e.g., `acestep-v15-turbo`) |
 | `--lm_model_path` | auto | LM model (e.g., `acestep-5Hz-lm-1.7B`) |
-| `--offload_to_cpu` | auto | CPU offload (auto-enabled if VRAM < 16GB) |
+| `--offload_to_cpu` | auto | CPU offload (auto-enabled if VRAM < 20GB) |
 | `--download-source` | auto | Model source: `auto` / `huggingface` / `modelscope` |
 | `--enable-api` | false | Enable REST API alongside Gradio UI |
 | `--api-key` | none | API key for authentication |
@@ -576,16 +580,17 @@ huggingface-cli download ACE-Step/acestep-5Hz-lm-4B --local-dir ./checkpoints/ac
 
 ## 💡 Which Model Should I Choose?
 
-ACE-Step automatically adapts to your GPU's VRAM:
+ACE-Step automatically adapts to your GPU's VRAM. The UI pre-configures all settings (LM model, backend, offloading, quantization) based on your detected GPU tier:
 
-| Your GPU VRAM | Recommended LM Model | Notes |
-|---------------|---------------------|-------|
-| **≤6GB** | None (DiT only) | LM disabled by default to save memory |
-| **6-12GB** | `acestep-5Hz-lm-0.6B` | Lightweight, good balance |
-| **12-16GB** | `acestep-5Hz-lm-1.7B` | Better quality |
-| **≥16GB** | `acestep-5Hz-lm-4B` | Best quality and audio understanding |
+| Your GPU VRAM | Recommended LM Model | Backend | Notes |
+|---------------|---------------------|---------|-------|
+| **≤6GB** | None (DiT only) | — | LM disabled by default; INT8 quantization + full CPU offload |
+| **6-8GB** | `acestep-5Hz-lm-0.6B` | `pt` | Lightweight LM with PyTorch backend |
+| **8-16GB** | `0.6B` / `1.7B` | `vllm` | 0.6B for 8-12GB, 1.7B for 12-16GB |
+| **16-24GB** | `acestep-5Hz-lm-1.7B` | `vllm` | 4B available on 20GB+; no offload on 20GB+ |
+| **≥24GB** | `acestep-5Hz-lm-4B` | `vllm` | Best quality, all models fit without offload |
 
-> 📖 For detailed GPU compatibility information (duration limits, batch sizes, memory optimization), see [GPU Compatibility Guide](GPU_COMPATIBILITY.md).
+> 📖 For detailed GPU compatibility information (tier table, duration limits, batch sizes, adaptive UI defaults, memory optimization), see [GPU Compatibility Guide](GPU_COMPATIBILITY.md).
 
 ---
 
