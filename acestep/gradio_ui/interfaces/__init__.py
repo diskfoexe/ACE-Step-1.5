@@ -108,6 +108,7 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
                 return f"{len(files)} Uploaded!"
             
             u_btn.click(quick_move, u_files, u_status)
+        # -----
 
         # -----
         with gr.Accordion("Download LoRA", open=False):
