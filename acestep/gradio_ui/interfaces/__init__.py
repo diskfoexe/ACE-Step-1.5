@@ -108,6 +108,14 @@ def create_gradio_interface(dit_handler, llm_handler, dataset_handler, init_para
                 return f"{len(files)} Uploaded!"
             
             u_btn.click(quick_move, u_files, u_status)
+
+        # -----
+        with gr.Accordion("Download LoRA", open=False):
+            d_btn = gr.Button("Zip & Download", variant="primary")
+            d_out = gr.File(label="Output ZIP")
+    
+            # פקודה אחת: לוקחת את lora_output, הופכת ל-ZIP ומציגה להורדה
+            d_btn.click(lambda: shutil.make_archive("my_loras", 'zip', "./lora_output"), None, d_out)
         # -----
         
         
